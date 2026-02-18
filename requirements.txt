@@ -1,0 +1,6 @@
+# Telegram Bot API
+python-telegram-bot>=20.0
+# DeepSeek API (совместим с OpenAI SDK)
+openai>=1.0.0
+# Загрузка .env
+python-dotenv>=1.0.0

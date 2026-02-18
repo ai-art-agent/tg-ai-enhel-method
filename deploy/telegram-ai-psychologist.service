@@ -1,0 +1,24 @@
+# Служба systemd для бота «ИИ-психолог» на Ubuntu в Yandex Cloud.
+# Установка:
+#   sudo cp telegram-ai-psychologist.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable telegram-ai-psychologist
+#   sudo systemctl start telegram-ai-psychologist
+#
+# Если пользователь на ВМ не ubuntu или папка другая — отредактируйте пути ниже.
+
+[Unit]
+Description=Telegram bot AI Psychologist
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/telegram-ai-psychologist
+Environment=PATH=/home/ubuntu/telegram-ai-psychologist/venv/bin
+ExecStart=/home/ubuntu/telegram-ai-psychologist/venv/bin/python bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
