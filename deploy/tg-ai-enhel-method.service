@@ -1,0 +1,24 @@
+# Служба systemd для бота «ИИ-психолог» на Ubuntu в Yandex Cloud.
+# Установка (на ВМ):
+#   sudo cp ~/tg-ai-enhel-method/deploy/tg-ai-enhel-method.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable tg-ai-enhel-method
+#   sudo systemctl start tg-ai-enhel-method
+#
+# Если на ВМ пользователь не enhel-method, а ubuntu — замените enhel-method на ubuntu в путях и User ниже.
+
+[Unit]
+Description=Telegram bot AI Psychologist
+After=network.target
+
+[Service]
+Type=simple
+User=enhel-method
+WorkingDirectory=/home/enhel-method/tg-ai-enhel-method
+Environment=PATH=/home/enhel-method/tg-ai-enhel-method/venv/bin
+ExecStart=/home/enhel-method/tg-ai-enhel-method/venv/bin/python bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

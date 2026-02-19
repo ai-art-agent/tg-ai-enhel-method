@@ -26,6 +26,7 @@
 ## Что понадобится до начала
 
 - Компьютер с Windows и доступ в интернет.
+- На Windows проект может лежать в `C:\Users\AI_Art\telegram-ai-psychologist` (папка `deploy` — внутри неё: `tg-ai-enhel-method.service`, `handler_webhook.py`). На ВМ после `git clone` репозиторий окажется в `~/tg-ai-enhel-method`.
 - Номер телефона и банковская карта (для регистрации в Yandex Cloud; есть бесплатный период и грант для новых пользователей).
 - Токен бота от [@BotFather](https://t.me/BotFather) и ключ DeepSeek API (у вас уже должны быть, раз бот работает локально).
 
@@ -119,9 +120,9 @@
 ### Шаг 3.1. Подключение в PowerShell
 
 1. Откройте **PowerShell**.
-2. Выполните (подставьте ваш **публичный IP** ВМ; для `-i` указывается **приватный** ключ, файл **без** `.pub`):
+2. Выполните (подставьте **IP ВМ** и **имя пользователя ВМ** — в консоли Yandex указано, например `ubuntu` или `enhel-method`; для `-i` — **приватный** ключ, файл без `.pub`):
    ```powershell
-   ssh -i "$env:USERPROFILE\.ssh\id_ed25519_yandex" ubuntu@51.250.XXX.XXX
+   ssh -i "$env:USERPROFILE\.ssh\id_ed25519_yandex" ИМЯ_ПОЛЬЗОВАТЕЛЯ_ВМ@51.250.XXX.XXX
    ```
 3. При первом подключении появится вопрос про fingerprint — введите `yes`.
 4. Если ключ добавлен правильно, вы окажетесь в консоли Linux на ВМ (приглашение вида `ubuntu@ai-psychologist-bot:~$`).
@@ -266,10 +267,10 @@ GitHub больше не принимает обычный пароль при `
 
 ### Вариант A: Копирование файлов с компьютера (SCP)
 
-На **вашем Windows-компьютере** откройте PowerShell в папке с ботом (например, `C:\Users\AI_Art\tg-ai-enhel-method`) и выполните (подставьте IP ВМ и путь к ключу):
+На **вашем Windows-компьютере** откройте PowerShell в папке с ботом (например, `C:\Users\AI_Art\telegram-ai-psychologist`) и выполните (подставьте IP ВМ и имя пользователя ВМ — `ubuntu` или `enhel-method`):
 
 ```powershell
-scp -i "$env:USERPROFILE\.ssh\id_ed25519_yandex" bot.py requirements.txt .env.example ubuntu@51.250.XXX.XXX:~/tg-ai-enhel-method/
+scp -i "$env:USERPROFILE\.ssh\id_ed25519_yandex" bot.py requirements.txt .env.example ИМЯ_ПОЛЬЗОВАТЕЛЯ_ВМ@51.250.XXX.XXX:~/tg-ai-enhel-method/
 ```
 
 **Важно:** файл `.env` с секретами на сервер так лучше не передавать. Его создадим вручную на ВМ (см. ниже). Если всё же копируете `.env`, используйте `scp ... .env ...` и убедитесь, что он не попадёт в публичный репозиторий.
@@ -346,20 +347,22 @@ python bot.py
 
 ### Шаг 7.1. Создание unit-файла службы
 
-В проекте есть готовый файл `deploy/tg-ai-enhel-method.service`. Можно загрузить его на ВМ и скопировать в systemd:
+В проекте есть готовый файл **`deploy/tg-ai-enhel-method.service`** (в репозитории он лежит в папке `deploy` рядом с `bot.py`). После клонирования на ВМ он будет по пути `~/tg-ai-enhel-method/deploy/tg-ai-enhel-method.service`. Скопируйте его в systemd:
 
 ```bash
-# На ВМ, после загрузки файла в ~/tg-ai-enhel-method/deploy/:
+# На ВМ (пользователь enhel-method или ubuntu — папка ~/tg-ai-enhel-method уже есть после git clone):
 sudo cp ~/tg-ai-enhel-method/deploy/tg-ai-enhel-method.service /etc/systemd/system/
 ```
 
-Либо создать вручную:
+В файле по умолчанию указаны пользователь **enhel-method** и каталог **/home/enhel-method/tg-ai-enhel-method**. Если на вашей ВМ пользователь **ubuntu**, отредактируйте unit-файл перед запуском службы:
 
 ```bash
 sudo nano /etc/systemd/system/tg-ai-enhel-method.service
 ```
 
-Вставьте следующий текст (путь `ubuntu` и `tg-ai-enhel-method` при необходимости замените на ваше имя пользователя и папку):
+Замените все вхождения `enhel-method` на `ubuntu` в строках `User=`, `WorkingDirectory=`, `Environment=`, `ExecStart=`.
+
+Либо создайте файл вручную и вставьте (подставьте своё имя пользователя ВМ вместо `enhel-method`, если у вас `ubuntu`):
 
 ```ini
 [Unit]
@@ -368,10 +371,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/tg-ai-enhel-method
-Environment=PATH=/home/ubuntu/tg-ai-enhel-method/venv/bin
-ExecStart=/home/ubuntu/tg-ai-enhel-method/venv/bin/python bot.py
+User=enhel-method
+WorkingDirectory=/home/enhel-method/tg-ai-enhel-method
+Environment=PATH=/home/enhel-method/tg-ai-enhel-method/venv/bin
+ExecStart=/home/enhel-method/tg-ai-enhel-method/venv/bin/python bot.py
 Restart=always
 RestartSec=10
 
@@ -415,21 +418,77 @@ sudo journalctl -u tg-ai-enhel-method -n 50 -f
 
 ---
 
-## Часть 8. Обновление бота на сервере
+## Часть 8. Обновление бота: от правок на ПК до работы на ВМ
 
-Когда измените код на компьютере:
+Когда вы изменили код (например, `bot.py`, промпты, `requirements.txt` или файлы в `deploy/`), нужно сначала выложить изменения на GitHub, затем подтянуть их на ВМ и перезапустить службу.
 
-1. Загрузите обновлённые файлы на ВМ (SCP или Git pull в папке бота на ВМ).
-2. На ВМ:
+### Шаг 8.1. Выкладка обновлённых файлов на GitHub (на вашем компьютере)
+
+Все команды ниже выполняются **в PowerShell на Windows**, в папке с проектом (например, `C:\Users\AI_Art\telegram-ai-psychologist`).
+
+1. **Перейти в папку проекта:**
+   ```powershell
+   cd C:\Users\AI_Art\telegram-ai-psychologist
+   ```
+
+2. **Посмотреть, какие файлы изменены:**
+   ```powershell
+   git status
+   ```
+   Будут перечислены изменённые (modified) и неотслеживаемые (untracked) файлы. Убедитесь, что в списке нет `.env` (он в `.gitignore`).
+
+3. **Добавить все изменения в индекс:**
+   ```powershell
+   git add .
+   ```
+   Либо добавить только нужные файлы, например:
+   ```powershell
+   git add bot.py
+   git add deploy/tg-ai-enhel-method.service
+   ```
+
+4. **Создать коммит с кратким описанием:**
+   ```powershell
+   git commit -m "Обновление промпта и кнопок бота"
+   ```
+   Текст в кавычках замените на своё описание изменений.
+
+5. **Отправить коммиты на GitHub:**
+   ```powershell
+   git push
+   ```
+   Если запросят логин и пароль — укажите логин GitHub и **Personal Access Token** (не пароль от аккаунта). После успешного `git push` обновлённый код доступен в репозитории на GitHub.
+
+### Шаг 8.2. Обновление кода на ВМ и перезапуск бота
+
+Подключитесь к ВМ по SSH (см. Часть 3), затем выполните команды **на ВМ**:
+
+1. **Перейти в каталог бота и подтянуть изменения из GitHub:**
    ```bash
    cd ~/tg-ai-enhel-method
-   # если используете Git:
-   # git pull
+   git pull
+   ```
+   Если репозиторий обновлён, появятся строки вида `Updating ... Fast-forward` и список изменённых файлов.
+
+2. **Обновить зависимости Python** (нужно, если меняли `requirements.txt` или добавляли библиотеки):
+   ```bash
    source venv/bin/activate
    pip install -r requirements.txt
    deactivate
+   ```
+
+3. **Перезапустить службу бота:**
+   ```bash
    sudo systemctl restart tg-ai-enhel-method
    ```
+
+4. **Проверить, что служба запущена:**
+   ```bash
+   sudo systemctl status tg-ai-enhel-method
+   ```
+   Должно быть `active (running)`. При необходимости посмотрите лог: `sudo journalctl -u tg-ai-enhel-method -n 50 -f`.
+
+**Кратко:** на ПК — `git add .` → `git commit -m "..."` → `git push`; на ВМ — `cd ~/tg-ai-enhel-method` → `git pull` → при необходимости `pip install -r requirements.txt` → `sudo systemctl restart tg-ai-enhel-method`.
 
 ---
 
