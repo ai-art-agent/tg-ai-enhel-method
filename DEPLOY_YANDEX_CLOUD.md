@@ -464,6 +464,8 @@ sudo journalctl -u tg-ai-enhel-method -n 50 -f
 Подключитесь к ВМ по SSH (см. Часть 3), затем выполните команды **на ВМ**:
 
 1. **Перейти в каталог бота и подтянуть изменения из GitHub:**
+ssh -i "$env:USERPROFILE\.ssh\id_ed25519_yandex" enhel-method@158.160.169.204
+
    ```bash
    cd ~/tg-ai-enhel-method
    git pull
