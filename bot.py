@@ -161,7 +161,8 @@ PRODUCTS = {
 }
 
 # Парсинг тега [STEP:step_id] в конце ответа модели.
-STEP_TAG_REGEX = re.compile(r"\n\[STEP:(\w+)\]$", re.IGNORECASE)
+# Допускаем пробелы/перенос строки до и после тега в конце сообщения.
+STEP_TAG_REGEX = re.compile(r"\s*\[STEP:(\w+)\]\s*$", re.IGNORECASE)
 
 # Маркер списка вместо "*" / "-" (модель часто выводит Markdown, в Telegram без parse_mode они видны как символы).
 LIST_MARKER = "➖"
