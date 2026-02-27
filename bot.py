@@ -158,10 +158,6 @@ PRICE_WEBINAR_RUB = _amount_from_env("PRICE_WEBINAR_RUB", "2990")
 PRICE_PRO_RUB = _amount_from_env("PRICE_PRO_RUB", "990")
 
 PRODUCTS = {
-    "group": {
-        "amount": PRICE_GROUP_RUB,
-        "description": "Оплата: Групповые занятия",
-    },
     "group_standard": {
         "amount": PRICE_GROUP_STANDARD_RUB,
         "description": "Оплата: Групповые занятия (Стандарт)",
