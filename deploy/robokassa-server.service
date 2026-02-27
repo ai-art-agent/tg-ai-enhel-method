@@ -1,0 +1,16 @@
+[Unit]
+Description=Robokassa HTTP server for Telegram AI psychologist bot
+After=network.target
+
+[Service]
+Type=simple
+User=enhel-method
+WorkingDirectory=/home/enhel-method/tg-ai-enhel-method
+Environment=PATH=/home/enhel-method/tg-ai-enhel-method/venv/bin
+ExecStart=/home/enhel-method/tg-ai-enhel-method/venv/bin/uvicorn robokassa_server:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
