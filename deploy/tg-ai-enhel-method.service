@@ -19,6 +19,9 @@ Environment=PATH=/home/enhel-method/tg-ai-enhel-method/venv/bin
 ExecStart=/home/enhel-method/tg-ai-enhel-method/venv/bin/python bot.py
 Restart=always
 RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tg-ai-enhel-method
 
 [Install]
 WantedBy=multi-user.target
