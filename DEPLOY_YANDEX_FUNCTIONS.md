@@ -146,3 +146,34 @@ Webhook в Telegram менять не нужно — URL остаётся тем
 
 - **Достаточно ли «просто функции» вместо ВМ?** Да, если вас устраивает отсутствие истории диалога между сообщениями и ограничение по таймауту. Тогда деплой в Cloud Functions проще и часто дешевле при малом трафике.
 - Для полноценного диалога с памятью без доработок используйте [ВМ](DEPLOY_YANDEX_CLOUD.md); при желании потом можно добавить БД и в вариант с функциями.
+
+---
+
+## Robokassa (оплата): отдельный HTTP-обработчик
+
+Если вы включили оплату через Robokassa, вам нужен **ещё один HTTP URL** (кроме Telegram webhook), потому что Robokassa будет слать запросы на ваши `ResultURL/SuccessURL/FailURL`.
+
+### Что есть в коде
+
+- `deploy/handler_robokassa.py`
+  - `handler_result` — **ResultURL** (server-to-server, подтверждает оплату). Возвращает `OK{InvId}`.
+  - `handler_success` — **SuccessURL** (редирект пользователя после оплаты, не подтверждает оплату).
+  - `handler_fail` — **FailURL**.
+
+### Как задеплоить
+
+1. Создайте **вторую Cloud Function** (или вторую версию функции с другим entrypoint) и загрузите тот же ZIP (как в шаге 3).
+2. Для обработчика ResultURL укажите:
+   - **Точка входа**: `deploy.handler_robokassa.handler_result`
+3. (Опционально) для SuccessURL/FailURL создайте ещё функции/версии с entrypoint:
+   - `deploy.handler_robokassa.handler_success`
+   - `deploy.handler_robokassa.handler_fail`
+4. В переменных окружения добавьте Robokassa-настройки (см. `.env.example`):
+   - `ROBOKASSA_MERCHANT_LOGIN`, `ROBOKASSA_PASSWORD1`, `ROBOKASSA_PASSWORD2`
+   - ссылки доступа: `WEBINAR_ACCESS_URL`, `GROUP_COURSE_ACCESS_URL`, `PRO_BOT_URL`
+
+### Что настроить в личном кабинете Robokassa
+
+- **Result URL**: URL функции с `handler_result`
+- **Success URL**: URL функции с `handler_success` (опционально)
+- **Fail URL**: URL функции с `handler_fail` (опционально)

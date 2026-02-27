@@ -406,15 +406,72 @@ sudo journalctl -u tg-ai-enhel-method -n 50 -f
 
 Выход из просмотра лога: `Ctrl+C`.
 
-### Шаг 7.3. Полезные команды службы
+### Шаг 7.3. (Опционально) HTTP-сервер Robokassa на ВМ
 
-| Действие              | Команда |
-|-----------------------|--------|
-| Остановить бота       | `sudo systemctl stop tg-ai-enhel-method` |
-| Запустить снова       | `sudo systemctl start tg-ai-enhel-method` |
-| Перезапустить         | `sudo systemctl restart tg-ai-enhel-method` |
-| Отключить автозапуск  | `sudo systemctl disable tg-ai-enhel-method` |
-| Смотреть лог          | `sudo journalctl -u tg-ai-enhel-method -f` |
+Если вы используете оплату через Robokassa **без Cloud Functions**, нужно поднять простой HTTP-сервер на ВМ.
+
+В проекте есть файл `robokassa_server.py` и unit-файл `deploy/robokassa-server.service`.
+
+1. На ВМ установите зависимости (если ещё не делали):
+
+```bash
+cd ~/tg-ai-enhel-method
+source venv/bin/activate
+pip install -r requirements.txt
+deactivate
+```
+
+2. Скопируйте unit-файл и при необходимости замените пользователя/пути (как для основного бота):
+
+```bash
+sudo cp ~/tg-ai-enhel-method/deploy/robokassa-server.service /etc/systemd/system/
+sudo nano /etc/systemd/system/robokassa-server.service
+```
+
+Замените `enhel-method` на имя вашего пользователя ВМ (`ubuntu` и т.п.) в строках `User=`, `WorkingDirectory=`, `Environment=`, `ExecStart=`.
+
+3. Включите и запустите службу:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable robokassa-server
+sudo systemctl start robokassa-server
+```
+
+Проверьте статус:
+
+```bash
+sudo systemctl status robokassa-server
+```
+
+Сервер слушает порт `8000` (см. `ExecStart`), эндпоинты:
+
+- `POST /robokassa/result`  — ResultURL (подтверждение оплаты, возвращает `OK{InvId}`)
+- `GET  /robokassa/success` — SuccessURL
+- `GET  /robokassa/fail`    — FailURL
+
+В кабинете Robokassa укажите:
+
+- **Result URL**: `http://ПУБЛИЧНЫЙ_IP_ВМ:8000/robokassa/result`
+- **Success URL**: `http://ПУБЛИЧНЫЙ_IP_ВМ:8000/robokassa/success`
+- **Fail URL**: `http://ПУБЛИЧНЫЙ_IP_ВМ:8000/robokassa/fail`
+
+Если настраиваете фаервол/группу безопасности только под Robokassa, разрешите входящий TCP 8000 с IP: **185.59.216.65**, **185.59.217.65** ([документация](https://docs.robokassa.ru/ru/notifications-and-redirects)).
+
+### Шаг 7.4. Полезные команды службы
+
+| Действие                        | Команда |
+|---------------------------------|--------|
+| Остановить бота                 | `sudo systemctl stop tg-ai-enhel-method` |
+| Запустить бота снова            | `sudo systemctl start tg-ai-enhel-method` |
+| Перезапустить бота              | `sudo systemctl restart tg-ai-enhel-method` |
+| Отключить автозапуск бота       | `sudo systemctl disable tg-ai-enhel-method` |
+| Смотреть лог бота               | `sudo journalctl -u tg-ai-enhel-method -f` |
+| Остановить сервер Robokassa     | `sudo systemctl stop robokassa-server` |
+| Запустить сервер Robokassa      | `sudo systemctl start robokassa-server` |
+| Перезапустить сервер Robokassa  | `sudo systemctl restart robokassa-server` |
+| Отключить автозапуск Robokassa  | `sudo systemctl disable robokassa-server` |
+| Смотреть лог Robokassa-сервера  | `sudo journalctl -u robokassa-server -f` |
 
 ---
 

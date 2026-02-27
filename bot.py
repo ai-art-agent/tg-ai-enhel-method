@@ -15,6 +15,13 @@ import asyncio
 from collections import defaultdict
 from typing import Optional
 
+from robokassa_integration import (
+    PaymentsDB,
+    RobokassaConfig,
+    build_payment_url,
+    _to_amount_str,
+)
+
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -116,6 +123,41 @@ STEP_KEYBOARDS = {
     "webinar_offer": [
         [("Онлайн вебинар", "Онлайн вебинар")],
     ],
+}
+
+# Кнопки продуктов (callback_data) -> внутренний код продукта для платежей
+PRODUCT_BUTTON_TO_CODE = {
+    "Групповые занятия": "group",
+    "Онлайн вебинар": "webinar",
+    "AI-Психолог Pro": "pro",
+}
+
+def _amount_from_env(name: str, default: str) -> str:
+    v = os.getenv(name, default)
+    try:
+        return _to_amount_str(v)
+    except Exception:
+        return _to_amount_str(default)
+
+
+# Цены (можно переопределить переменными окружения)
+PRICE_GROUP_RUB = _amount_from_env("PRICE_GROUP_RUB", "29990")
+PRICE_WEBINAR_RUB = _amount_from_env("PRICE_WEBINAR_RUB", "3000")
+PRICE_PRO_RUB = _amount_from_env("PRICE_PRO_RUB", "990")
+
+PRODUCTS = {
+    "group": {
+        "amount": PRICE_GROUP_RUB,
+        "description": "Оплата: Групповые занятия",
+    },
+    "webinar": {
+        "amount": PRICE_WEBINAR_RUB,
+        "description": "Оплата: Онлайн вебинар",
+    },
+    "pro": {
+        "amount": PRICE_PRO_RUB,
+        "description": "Оплата: AI-Психолог Pro (месяц)",
+    },
 }
 
 # Парсинг тега [STEP:step_id] в конце ответа модели.
@@ -332,8 +374,76 @@ async def handle_step_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_text = (update.callback_query.data or "").strip()
     if not user_text:
         return
+
+    # Запоминаем выбранный продукт, чтобы "Оплатить" мог выдать правильную ссылку.
+    if user_text in PRODUCT_BUTTON_TO_CODE:
+        context.user_data["selected_product"] = PRODUCT_BUTTON_TO_CODE[user_text]
+
+    # Специальная обработка оплаты (не отправляем это в модель).
+    if user_text.lower() == "оплатить":
+        await send_payment_link(update, context)
+        return
+
     await _reply_to_user(update, context, user_id, user_text)
 
+
+async def send_payment_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Генерирует ссылку Robokassa и отправляет пользователю.
+    Требует переменные окружения ROBOKASSA_MERCHANT_LOGIN/ROBOKASSA_PASSWORD1/ROBOKASSA_PASSWORD2.
+    """
+    query = update.callback_query
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or not user:
+        return
+
+    product_code = context.user_data.get("selected_product")
+    if not product_code or product_code not in PRODUCTS:
+        await query.edit_message_text("Сначала выбери продукт, потом нажми «Оплатить».")
+        return
+
+    try:
+        cfg = RobokassaConfig.from_env()
+        db = PaymentsDB.from_env()
+    except Exception as e:
+        logging.exception("Robokassa config/db error: %s", e)
+        await query.edit_message_text("Оплата временно недоступна. Попробуй позже.")
+        return
+
+    product = PRODUCTS[product_code]
+    amount = str(product["amount"])
+    description = str(product["description"])
+
+    inv_id, token = db.create_order(
+        user_id=int(user.id),
+        chat_id=int(chat.id),
+        product_code=str(product_code),
+        amount=amount,
+        description=description,
+    )
+
+    shp = {
+        "Shp_user_id": str(user.id),
+        "Shp_chat_id": str(chat.id),
+        "Shp_product": str(product_code),
+        "Shp_order_token": token,
+    }
+
+    pay_url = build_payment_url(
+        cfg=cfg,
+        inv_id=inv_id,
+        out_sum=amount,
+        description=description,
+        shp=shp,
+    )
+
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("Перейти к оплате", url=pay_url)]])
+    await query.edit_message_text(
+        f"Ссылка для оплаты:\n{pay_url}\n\nПосле оплаты я пришлю доступ автоматически.",
+        reply_markup=kb,
+        disable_web_page_preview=True,
+    )
 
 async def _reply_to_user(
     update: Update,

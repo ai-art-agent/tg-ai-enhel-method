@@ -336,6 +336,29 @@ DEEPSEEK_API_KEY=ваш_ключ_DeepSeek
 - Не публикуйте `.env` в интернете и не добавляйте в репозиторий (должен быть в `.gitignore`).
 - Файл `.env.example` можно хранить в репозитории как шаблон без секретов.
 
+### Оплата через Robokassa (если используете)
+
+Добавьте в `.env` (значения берутся из личного кабинета Robokassa):
+
+```env
+ROBOKASSA_MERCHANT_LOGIN=ваш_логин_мерчанта
+ROBOKASSA_PASSWORD1=пароль_1_для_подписи_ссылки
+ROBOKASSA_PASSWORD2=пароль_2_для_ResultURL
+```
+
+Опционально:
+
+```env
+ROBOKASSA_IS_TEST=1
+PAYMENTS_DB_PATH=payments.sqlite3
+PRICE_GROUP_RUB=29990
+PRICE_WEBINAR_RUB=3000
+PRICE_PRO_RUB=990
+WEBINAR_ACCESS_URL=https://...
+GROUP_COURSE_ACCESS_URL=https://...
+PRO_BOT_URL=https://t.me/...
+```
+
 ---
 
 ## Запуск бота
