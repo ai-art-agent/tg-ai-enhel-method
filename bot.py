@@ -123,6 +123,10 @@ STEP_KEYBOARDS = {
         [("Групповые занятия", "Групповые занятия"), ("Онлайн вебинар", "Онлайн вебинар")],
         [("AI-Психолог Pro", "AI-Психолог Pro")],
     ],
+    "vip": [
+        [("VIP", "VIP")],
+        [("Стандарт", "Стандарт")],
+    ],
     "pay_choice": [
         [("Оплатить", "Оплатить"), ("Еще думаю", "Еще думаю")],
     ],
@@ -147,14 +151,24 @@ def _amount_from_env(name: str, default: str) -> str:
 
 
 # Цены (можно переопределить переменными окружения)
-PRICE_GROUP_RUB = _amount_from_env("PRICE_GROUP_RUB", "29990")
-PRICE_WEBINAR_RUB = _amount_from_env("PRICE_WEBINAR_RUB", "3000")
+#PRICE_GROUP_RUB = _amount_from_env("PRICE_GROUP_RUB", "29990") группа исключена
+PRICE_GROUP_STANDARD_RUB = _amount_from_env("PRICE_GROUP_STANDARD_RUB", "24990")
+PRICE_GROUP_VIP_RUB = _amount_from_env("PRICE_GROUP_VIP_RUB", "45990")
+PRICE_WEBINAR_RUB = _amount_from_env("PRICE_WEBINAR_RUB", "2990")
 PRICE_PRO_RUB = _amount_from_env("PRICE_PRO_RUB", "990")
 
 PRODUCTS = {
     "group": {
         "amount": PRICE_GROUP_RUB,
         "description": "Оплата: Групповые занятия",
+    },
+    "group_standard": {
+        "amount": PRICE_GROUP_STANDARD_RUB,
+        "description": "Оплата: Групповые занятия (Стандарт)",
+    },
+    "group_vip": {
+        "amount": PRICE_GROUP_VIP_RUB,
+        "description": "Оплата: Групповые занятия (VIP)",
     },
     "webinar": {
         "amount": PRICE_WEBINAR_RUB,
@@ -386,6 +400,12 @@ async def handle_step_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if user_text in PRODUCT_BUTTON_TO_CODE:
         context.user_data["selected_product"] = PRODUCT_BUTTON_TO_CODE[user_text]
 
+    # При выборе групповых занятий запоминаем тариф (VIP / Стандарт).
+    if user_text == "VIP" and context.user_data.get("selected_product") == "group":
+        context.user_data["group_tariff"] = "vip"
+    elif user_text == "Стандарт" and context.user_data.get("selected_product") == "group":
+        context.user_data["group_tariff"] = "standard"
+
     # Специальная обработка оплаты (не отправляем это в модель).
     if user_text.lower() == "оплатить":
         await send_payment_link(update, context)
@@ -408,6 +428,12 @@ async def send_payment_link(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     product_code = context.user_data.get("selected_product")
     if not product_code or product_code not in PRODUCTS:
         await query.edit_message_text("Сначала выбери продукт, потом нажми «Оплатить».")
+        return
+    # Для групповых занятий подставляем тариф (VIP или Стандарт).
+    if product_code == "group":
+        product_code = "group_vip" if context.user_data.get("group_tariff") == "vip" else "group_standard"
+    if product_code not in PRODUCTS:
+        await query.edit_message_text("Сначала выбери тариф (VIP или Стандарт) для групповых занятий.")
         return
 
     try:
