@@ -107,6 +107,12 @@ STEP_KEYBOARDS = {
     "messenger": [
         [("Telegram", "Telegram"), ("Сотовый", "Сотовый"), ("Другое", "Другое")],
     ],
+    "conflict": [
+        [("Вариант 1", "Вариант 1")],
+        [("Вариант 2", "Вариант 2")],
+        [("Вариант 3", "Вариант 3")],
+        [("Свой вариант", "Свой вариант")],
+    ],
     "insight_next": [
         [("Обсудить возможные пути", "Обсудить возможные пути")],
     ],
@@ -441,7 +447,7 @@ async def send_payment_link(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("Перейти к оплате", url=pay_url)]])
     await query.edit_message_text(
-        f"Ссылка для оплаты:\n{pay_url}\n\nПосле оплаты я пришлю доступ автоматически.",
+        "Ссылка для оплаты — под кнопкой ниже. После оплаты будет направлена вся необходимая информация.",
         reply_markup=kb,
         disable_web_page_preview=True,
     )

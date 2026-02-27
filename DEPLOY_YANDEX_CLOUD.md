@@ -479,7 +479,21 @@ sudo systemctl status robokassa-server
 
 Когда вы изменили код (например, `bot.py`, промпты, `requirements.txt` или файлы в `deploy/`), нужно сначала выложить изменения на GitHub, затем подтянуть их на ВМ и перезапустить службу.
 
-### Шаг 8.1. Выкладка обновлённых файлов на GitHub (на вашем компьютере)
+### Автообновление одним запуском (Windows)
+
+В корне проекта есть скрипты для пошагового деплоя **без ручного ввода команд**:
+
+| Файл | Назначение |
+|------|------------|
+| **deploy_to_vm.bat** | Запуск цепочки: открывает два окна PowerShell и не закрывает их по окончании. |
+| **deploy_local.ps1** | Окно 1: локально выполняет `git status`, `git add`, запрашивает сообщение коммита, `git commit`, запрос «push и открыть окно ВМ?», затем `git push` и запуск второго окна. |
+| **deploy_remote.ps1** | Окно 2: подключается по SSH к ВМ и выполняет `git pull`, `pip install -r requirements.txt`, `sudo systemctl restart tg-ai-enhel-method`, вывод статуса службы. |
+
+**Как пользоваться:** дважды щёлкните по **deploy_to_vm.bat**. Откроется первое окно PowerShell — введите сообщение коммита (или Enter для значения по умолчанию), при запросе «Run git push and open VM window?» введите **y**. После `git push` автоматически откроется второе окно с подключением к ВМ и обновлением. Оба окна остаются открытыми для просмотра вывода.
+
+**Настройка:** в `deploy_local.ps1` задан путь к проекту (`$ProjectPath`), в `deploy_remote.ps1` — путь к SSH-ключу и хост (`$hostUser`). При другом пути или другом хосте/пользователе ВМ отредактируйте эти переменные в начале соответствующих `.ps1` файлов.
+
+### Шаг 8.1. Выкладка обновлённых файлов на GitHub (вручную)
 
 Все команды ниже выполняются **в PowerShell на Windows**, в папке с проектом (например, `C:\Users\AI_Art\telegram-ai-psychologist`).
 
@@ -547,7 +561,7 @@ ssh -i "$env:USERPROFILE\.ssh\id_ed25519_yandex" enhel-method@158.160.169.204
    ```
    Должно быть `active (running)`. При необходимости посмотрите лог: `sudo journalctl -u tg-ai-enhel-method -n 50 -f`.
 
-**Кратко:** на ПК — `git add .` → `git commit -m "..."` → `git push`; на ВМ — `cd ~/tg-ai-enhel-method` → `git pull` → при необходимости `pip install -r requirements.txt` → `sudo systemctl restart tg-ai-enhel-method`.
+**Кратко:** на ПК — `git add .` → `git commit -m "..."` → `git push`; на ВМ — `cd ~/tg-ai-enhel-method` → `git pull` → при необходимости `pip install -r requirements.txt` → `sudo systemctl restart tg-ai-enhel-method`. Либо один раз запустите **deploy_to_vm.bat** (см. выше) — он откроет два окна и выполнит эти шаги с запросами коммита и подтверждения push.
 
 ---
 
@@ -572,4 +586,4 @@ ssh -i "$env:USERPROFILE\.ssh\id_ed25519_yandex" enhel-method@158.160.169.204
 
 ## Итог
 
-После выполнения всех шагов бот работает на ВМ в Yandex Cloud 24/7, перезапускается при сбоях и после перезагрузки сервера. Обновления — загрузка файлов и `systemctl restart tg-ai-enhel-method`.
+После выполнения всех шагов бот работает на ВМ в Yandex Cloud 24/7, перезапускается при сбоях и после перезагрузки сервера. Обновления — загрузка файлов и `systemctl restart tg-ai-enhel-method`; удобный вариант — запуск **deploy_to_vm.bat** (открывает два окна: локальный коммит/push и подключение к ВМ с обновлением), см. Часть 8.

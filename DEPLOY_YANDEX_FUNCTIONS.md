@@ -140,6 +140,8 @@ https://api.telegram.org/bot<ТОКЕН>/deleteWebhook
 
 Webhook в Telegram менять не нужно — URL остаётся тем же.
 
+**Примечание:** при деплое на **виртуальную машину** (а не в Cloud Functions) для обновления с ПК на ВМ можно использовать скрипты автообновления: `deploy_to_vm.bat`, `deploy_local.ps1`, `deploy_remote.ps1`. Подробности — в [DEPLOY_YANDEX_CLOUD.md](DEPLOY_YANDEX_CLOUD.md) (Часть 8).
+
 ---
 
 ## Итог
