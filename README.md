@@ -68,4 +68,11 @@
 
 Если бот развёрнут на виртуальной машине (Yandex Cloud и т.п.), для обновления кода на ПК и на ВМ можно один раз запустить **deploy_to_vm.bat**. Скрипт откроет два окна PowerShell: в первом — коммит и push (с запросом сообщения коммита и подтверждения), во втором — подключение к ВМ, `git pull`, установка зависимостей и перезапуск службы бота. Подробности — в [DEPLOY_YANDEX_CLOUD.md](DEPLOY_YANDEX_CLOUD.md) (Часть 8). Файлы автообновления: `deploy_to_vm.bat`, `deploy_local.ps1`, `deploy_remote.ps1`.
 
+**Как обновить всё после правок:**
+1. **Локально** — сохраните изменения в `bot.py`, `system_prompt.txt`, конфигах или скриптах деплоя.
+2. **Деплой на ВМ** — запустите **deploy_to_vm.bat** (или вручную: `git add .` → `git commit -m "..."` → `git push`; на ВМ: `cd ~/tg-ai-enhel-method` → `git pull` → `pip install -r requirements.txt` при изменении зависимостей → `sudo systemctl restart tg-ai-enhel-method`).
+3. **Промпт** — при изменении `system_prompt.txt` достаточно перезапустить бота (промпт читается при старте).
+4. **Переменные окружения** — при добавлении новых ключей в `.env` скопируйте их в `.env` на ВМ и перезапустите службу.
+5. **Unit systemd** — при изменении `deploy/tg-ai-enhel-method.service` на ВМ выполните: `sudo cp ~/tg-ai-enhel-method/deploy/tg-ai-enhel-method.service /etc/systemd/system/` → `sudo systemctl daemon-reload` → `sudo systemctl restart tg-ai-enhel-method`.
+
 После заполнения ответов в INSTRUCTIONS.md можно дополнительно адаптировать скрипт (например, голосовые сообщения, другой тон, другие контакты поддержки).

@@ -70,8 +70,8 @@ MAX_HISTORY_MESSAGES = 10
 # Максимальная длина ответа ИИ в символах (Этап 2). 0 = без жёсткого лимита.
 MAX_RESPONSE_LENGTH = 0
 
-# Текст согласия при /start (Этап 4). Пустая строка = не показывать.
-START_DISCLAIMER = "Этот бот не заменяет врача или психолога. Общая информация и поддержка. В кризисе обращайтесь к специалисту. Продолжая, вы это понимаете."
+# Текст согласия при /start (Этап 4). Пустая строка = не показывать. Без упоминания бота/ИИ — в соответствии с промптом.
+START_DISCLAIMER = "Каждый вопрос, каждая проблема уникальны и требуют индивидуального подхода. Именно поэтому я здесь, чтобы помочь тебе разобраться в своем состоянии и найти решение."
 
 # Контакты поддержки для /support (Этап 4). Оставьте пустым, если команда не нужна.
 SUPPORT_TEXT = """При кризисе или тяжёлом состоянии важно обратиться к человеку:
@@ -175,6 +175,9 @@ PRODUCTS = {
         "description": "Оплата: AI-Психолог Pro (месяц)",
     },
 }
+
+# Формат анкеты (outcome) — совпадает с system_prompt.txt. При сохранении анкет/БД клиентов
+# использовать те же ключи: readiness, product, tariff, preferred_contact_time, preferred_group_start.
 
 # Парсинг тега [STEP:step_id] в конце ответа модели.
 # Допускаем пробелы/перенос строки до и после тега в конце сообщения.
@@ -301,7 +304,7 @@ async def check_access(update: Update) -> bool:
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await check_access(update):
         return
-    text = "Привет. Нажми **Начать**, чтобы начать разговор."
+    text = "Привет. Нажми кнопку ниже, чтобы начать разговор."
     if START_DISCLAIMER:
         text += "\n\n" + START_DISCLAIMER
     keyboard = [[InlineKeyboardButton("Начать", callback_data="start_chat")]]
@@ -495,8 +498,8 @@ async def _reply_to_user(
             stream = await client.chat.completions.create(
                 model=DEEPSEEK_MODEL,
                 messages=messages,
-                max_tokens=800,
-                temperature=0.7,
+                max_tokens=4800,
+                temperature=1.75,
                 stream=True,
             )
             accumulated = ""
