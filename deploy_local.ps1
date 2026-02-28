@@ -52,7 +52,8 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host ""
 Write-Host "Push done. Opening VM window..." -ForegroundColor Green
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $scriptDir "deploy_remote.ps1")
+$pwshExe = "C:\Program Files\PowerShell\7-preview\pwsh.exe"
+Start-Process $pwshExe -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $scriptDir "deploy_remote.ps1")
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan

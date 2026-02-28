@@ -116,9 +116,7 @@ STEP_KEYBOARDS = {
     "insight_next": [
         [("Обсудить возможные пути", "Обсудить возможные пути")],
     ],
-    "readiness": [
-        [("Готов/готова", "Готов/готова"), ("Еще подумаю", "Еще подумаю")],
-    ],
+    "readiness": None,  # строится в _keyboard_for_step по context.user_data["form_address"]
     "products": [
         [("Групповые занятия", "Групповые занятия"), ("Онлайн вебинар", "Онлайн вебинар")],
         [("AI-Психолог Pro", "AI-Психолог Pro")],
@@ -179,9 +177,9 @@ PRODUCTS = {
 # Формат анкеты (outcome) — совпадает с system_prompt.txt. При сохранении анкет/БД клиентов
 # использовать те же ключи: readiness, product, tariff, preferred_contact_time, preferred_group_start.
 
-# Парсинг тега [STEP:step_id] в конце ответа модели.
-# Допускаем пробелы/перенос строки до и после тега в конце сообщения.
-STEP_TAG_REGEX = re.compile(r"\s*\[STEP:(\w+)\]\s*$", re.IGNORECASE)
+# Парсинг тега [STEP:step_id] в ответе модели. Ищем последнее вхождение, чтобы кнопки показывались
+# даже если модель добавила текст после тега или пробел после двоеточия.
+STEP_TAG_REGEX = re.compile(r"\[STEP:\s*(\w+)\]", re.IGNORECASE)
 # Автогенерация кнопок: [BUTTONS: Текст1 | Текст2 | Текст3] (до 4 кнопок, до 64 байт на callback_data).
 BUTTONS_TAG_REGEX = re.compile(r"\s*\[BUTTONS:\s*([^\]]+)\]", re.IGNORECASE)
 CALLBACK_DATA_MAX_BYTES = 64
@@ -247,15 +245,38 @@ def _get_reply_target(update: Update):
 
 
 def _parse_step_from_reply(reply: str) -> tuple[str, Optional[str]]:
-    """Убирает из ответа тег [STEP:step_id] в конце и возвращает (очищенный текст, step_id или None)."""
-    m = STEP_TAG_REGEX.search(reply)
-    if m:
-        return reply[: m.start()].rstrip(), m.group(1).lower()
-    return reply, None
+    """Ищет последнее вхождение [STEP:step_id] в ответе, убирает его и всё после него; возвращает (очищенный текст, step_id или None)."""
+    matches = list(STEP_TAG_REGEX.finditer(reply))
+    if not matches:
+        return reply, None
+    last = matches[-1]
+    step_id = last.group(1).lower()
+    # Показываем пользователю только текст до тега (тег и всё после — скрыты).
+    reply_clean = reply[: last.start()].rstrip()
+    # Для [STEP:custom] после тега идёт [BUTTONS: ...] — оставляем хвост для _parse_custom_buttons.
+    if step_id == "custom":
+        reply_clean = (reply_clean + " " + reply[last.end() :].lstrip()).strip()
+    return reply_clean, step_id
 
 
-def _keyboard_for_step(step_id: str) -> Optional[InlineKeyboardMarkup]:
-    """Клавиатура по step_id; None если шаг неизвестен."""
+def _readiness_label_and_callback(form_address: Optional[str]) -> tuple[str, str]:
+    """По выбранной форме обращения возвращает (подпись кнопки, callback_data) для шага readiness."""
+    if form_address == "Мужская форма обращения":
+        return "Готов", "Готов"
+    if form_address == "Женская форма обращения":
+        return "Готова", "Готова"
+    return "Готов/готова", "Готов/готова"
+
+
+def _keyboard_for_step(step_id: str, context: Optional[ContextTypes.DEFAULT_TYPE] = None) -> Optional[InlineKeyboardMarkup]:
+    """Клавиатура по step_id; для readiness подпись кнопки зависит от context.user_data['form_address']."""
+    if step_id == "readiness":
+        label, callback = _readiness_label_and_callback(
+            context.user_data.get("form_address") if context else None
+        )
+        rows = [[(label, callback), ("Еще подумаю", "Еще подумаю")]]
+        return InlineKeyboardMarkup([[InlineKeyboardButton(str(btn_label), callback_data=str(btn_cb)) for btn_label, btn_cb in row] for row in rows])
+
     rows = STEP_KEYBOARDS.get(step_id)
     if not rows:
         return None
@@ -424,6 +445,10 @@ async def handle_step_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not user_text:
         return
 
+    # Запоминаем форму обращения для кнопки «Готов/Готова» на шаге readiness.
+    if user_text in ("Мужская форма обращения", "Женская форма обращения", "Нейтральная форма обращения"):
+        context.user_data["form_address"] = user_text
+
     # Запоминаем выбранный продукт, чтобы "Оплатить" мог выдать правильную ссылку.
     if user_text in PRODUCT_BUTTON_TO_CODE:
         context.user_data["selected_product"] = PRODUCT_BUTTON_TO_CODE[user_text]
@@ -555,7 +580,7 @@ async def _reply_to_user(
             if not reply_raw:
                 reply_raw = "Не удалось сформировать ответ."
             reply_clean, step_id = _parse_step_from_reply(reply_raw)
-            keyboard = _keyboard_for_step(step_id) if step_id else None
+            keyboard = _keyboard_for_step(step_id, context) if step_id else None
             if keyboard is None:
                 reply_clean, keyboard = _parse_custom_buttons(reply_clean)
             final_text = reply_clean[:4096] if len(reply_clean) > 4096 else reply_clean
@@ -582,7 +607,7 @@ async def _reply_to_user(
             reply_raw = response.choices[0].message.content or ""
             reply_raw = truncate_response(reply_raw.strip())
             reply_clean, step_id = _parse_step_from_reply(reply_raw)
-            keyboard = _keyboard_for_step(step_id) if step_id else None
+            keyboard = _keyboard_for_step(step_id, context) if step_id else None
             if keyboard is None:
                 reply_clean, keyboard = _parse_custom_buttons(reply_clean)
             final_text = reply_clean[:4096] if len(reply_clean) > 4096 else reply_clean
