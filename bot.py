@@ -182,6 +182,9 @@ PRODUCTS = {
 # Парсинг тега [STEP:step_id] в конце ответа модели.
 # Допускаем пробелы/перенос строки до и после тега в конце сообщения.
 STEP_TAG_REGEX = re.compile(r"\s*\[STEP:(\w+)\]\s*$", re.IGNORECASE)
+# Автогенерация кнопок: [BUTTONS: Текст1 | Текст2 | Текст3] (до 4 кнопок, до 64 байт на callback_data).
+BUTTONS_TAG_REGEX = re.compile(r"\s*\[BUTTONS:\s*([^\]]+)\]", re.IGNORECASE)
+CALLBACK_DATA_MAX_BYTES = 64
 
 # Маркер списка вместо "*" / "-" (модель часто выводит Markdown, в Telegram без parse_mode они видны как символы).
 LIST_MARKER = "➖"
@@ -258,6 +261,32 @@ def _keyboard_for_step(step_id: str) -> Optional[InlineKeyboardMarkup]:
         return None
     keyboard = [[InlineKeyboardButton(str(label), callback_data=str(cb)) for label, cb in row] for row in rows]
     return InlineKeyboardMarkup(keyboard)
+
+
+def _truncate_callback_data(s: str, max_bytes: int = CALLBACK_DATA_MAX_BYTES) -> str:
+    """Обрезает строку до max_bytes в UTF-8 (лимит Telegram для callback_data)."""
+    data = s.strip().encode("utf-8")
+    if len(data) <= max_bytes:
+        return s.strip()
+    return data[:max_bytes].decode("utf-8", errors="ignore").strip() or s[:1]
+
+
+def _parse_custom_buttons(reply: str) -> tuple[str, Optional[InlineKeyboardMarkup]]:
+    """
+    Ищет в ответе тег [BUTTONS: Текст1 | Текст2 | ...], строит клавиатуру (до 4 кнопок),
+    удаляет тег из текста. Возвращает (очищенный текст, клавиатура или None).
+    """
+    m = BUTTONS_TAG_REGEX.search(reply)
+    if not m:
+        return reply, None
+    raw = m.group(1).strip()
+    labels = [part.strip() for part in re.split(r"\s*\|\s*", raw) if part.strip()][:4]
+    if not labels:
+        return reply[: m.start()].rstrip() + reply[m.end() :].lstrip(), None
+    rows = [[(label, _truncate_callback_data(label))] for label in labels]
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(str(label), callback_data=cb) for label, cb in row] for row in rows])
+    cleaned = (reply[: m.start()].rstrip() + " " + reply[m.end() :].lstrip()).strip()
+    return cleaned, keyboard
 
 
 def get_history_messages(user_id: int) -> list[dict]:
@@ -527,6 +556,8 @@ async def _reply_to_user(
                 reply_raw = "Не удалось сформировать ответ."
             reply_clean, step_id = _parse_step_from_reply(reply_raw)
             keyboard = _keyboard_for_step(step_id) if step_id else None
+            if keyboard is None:
+                reply_clean, keyboard = _parse_custom_buttons(reply_clean)
             final_text = reply_clean[:4096] if len(reply_clean) > 4096 else reply_clean
             final_text, parse_mode = _format_reply_for_telegram(final_text)
             if len(final_text) > 4096:
@@ -552,6 +583,8 @@ async def _reply_to_user(
             reply_raw = truncate_response(reply_raw.strip())
             reply_clean, step_id = _parse_step_from_reply(reply_raw)
             keyboard = _keyboard_for_step(step_id) if step_id else None
+            if keyboard is None:
+                reply_clean, keyboard = _parse_custom_buttons(reply_clean)
             final_text = reply_clean[:4096] if len(reply_clean) > 4096 else reply_clean
             final_text, parse_mode = _format_reply_for_telegram(final_text)
             if len(final_text) > 4096:
