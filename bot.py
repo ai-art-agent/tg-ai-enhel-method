@@ -454,10 +454,15 @@ async def handle_step_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data["selected_product"] = PRODUCT_BUTTON_TO_CODE[user_text]
 
     # При выборе групповых занятий запоминаем тариф (VIP / Стандарт).
-    if user_text == "VIP" and context.user_data.get("selected_product") == "group":
+    # Если продукт ещё не был выбран кнопкой (например, написали текстом), считаем, что это групповые — иначе кнопки VIP/Стандарт не показываются.
+    if user_text == "VIP":
         context.user_data["group_tariff"] = "vip"
-    elif user_text == "Стандарт" and context.user_data.get("selected_product") == "group":
+        if context.user_data.get("selected_product") is None:
+            context.user_data["selected_product"] = "group"
+    elif user_text == "Стандарт":
         context.user_data["group_tariff"] = "standard"
+        if context.user_data.get("selected_product") is None:
+            context.user_data["selected_product"] = "group"
 
     # Специальная обработка оплаты (не отправляем это в модель).
     if user_text.lower() == "оплатить":
