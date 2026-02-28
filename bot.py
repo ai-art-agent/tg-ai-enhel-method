@@ -269,13 +269,21 @@ def _readiness_label_and_callback(form_address: Optional[str]) -> tuple[str, str
 
 
 def _keyboard_for_step(step_id: str, context: Optional[ContextTypes.DEFAULT_TYPE] = None) -> Optional[InlineKeyboardMarkup]:
-    """Клавиатура по step_id; для readiness подпись кнопки зависит от context.user_data['form_address']."""
+    """Клавиатура по step_id; для readiness подпись кнопки зависит от context.user_data['form_address']; для pay_choice в callback «Оплатить» зашивается код продукта."""
     if step_id == "readiness":
         label, callback = _readiness_label_and_callback(
             context.user_data.get("form_address") if context else None
         )
         rows = [[(label, callback), ("Еще подумаю", "Еще подумаю")]]
         return InlineKeyboardMarkup([[InlineKeyboardButton(str(btn_label), callback_data=str(btn_cb)) for btn_label, btn_cb in row] for row in rows])
+
+    if step_id == "pay_choice" and context:
+        product_code = context.user_data.get("selected_product")
+        if product_code == "group":
+            product_code = "group_vip" if context.user_data.get("group_tariff") == "vip" else "group_standard"
+        if product_code and product_code in PRODUCTS:
+            rows = [[("Оплатить", f"pay:{product_code}")], [("Еще думаю", "Еще думаю")]]
+            return InlineKeyboardMarkup([[InlineKeyboardButton(str(l), callback_data=str(c)) for l, c in row] for row in rows])
 
     rows = STEP_KEYBOARDS.get(step_id)
     if not rows:
@@ -430,6 +438,32 @@ async def button_start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await _reply_to_user(update, context, user_id, "Начать")
 
 
+def _apply_product_and_tariff_from_text(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    """
+    По тексту пользователя (например «ВИП», «Групповые занятия») выставляет
+    context.user_data["selected_product"] и при необходимости ["group_tariff"],
+    чтобы кнопка «Оплатить» сработала и при ответе текстом, а не только по кнопке.
+    """
+    if not text:
+        return
+    t = text.strip()
+    # Точное совпадение с кнопками продуктов
+    if t in PRODUCT_BUTTON_TO_CODE:
+        context.user_data["selected_product"] = PRODUCT_BUTTON_TO_CODE[t]
+        return
+    # ВИП / VIP — тариф групповых
+    if t.upper() in ("ВИП", "VIP"):
+        context.user_data["group_tariff"] = "vip"
+        if context.user_data.get("selected_product") is None:
+            context.user_data["selected_product"] = "group"
+        return
+    # Стандарт — тариф групповых
+    if t.lower() == "стандарт":
+        context.user_data["group_tariff"] = "standard"
+        if context.user_data.get("selected_product") is None:
+            context.user_data["selected_product"] = "group"
+
+
 async def handle_step_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка нажатия кнопки шага: callback_data уходит в модель как ответ пользователя."""
     if not update.callback_query:
@@ -468,14 +502,19 @@ async def handle_step_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if user_text.lower() == "оплатить":
         await send_payment_link(update, context)
         return
+    if user_text.startswith("pay:") and len(user_text) > 4:
+        product_code = user_text[4:].strip()
+        if product_code in PRODUCTS:
+            await send_payment_link(update, context, product_code_override=product_code)
+            return
 
     await _reply_to_user(update, context, user_id, user_text)
 
 
-async def send_payment_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def send_payment_link(update: Update, context: ContextTypes.DEFAULT_TYPE, product_code_override: Optional[str] = None) -> None:
     """
     Генерирует ссылку Robokassa и отправляет пользователю.
-    Требует переменные окружения ROBOKASSA_MERCHANT_LOGIN/ROBOKASSA_PASSWORD1/ROBOKASSA_PASSWORD2.
+    product_code_override: если задан, используется вместо context.user_data (кнопка «Оплатить» с callback pay:КОД).
     """
     query = update.callback_query
     chat = update.effective_chat
@@ -483,12 +522,11 @@ async def send_payment_link(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not chat or not user:
         return
 
-    product_code = context.user_data.get("selected_product")
+    product_code = product_code_override or context.user_data.get("selected_product")
     if not product_code or product_code not in PRODUCTS:
         await query.edit_message_text("Сначала выбери продукт, потом нажми «Оплатить».")
         return
-    # Для групповых занятий подставляем тариф (VIP или Стандарт).
-    if product_code == "group":
+    if not product_code_override and product_code == "group":
         product_code = "group_vip" if context.user_data.get("group_tariff") == "vip" else "group_standard"
     if product_code not in PRODUCTS:
         await query.edit_message_text("Сначала выбери тариф (VIP или Стандарт) для групповых занятий.")
@@ -650,11 +688,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not await check_access(update):
         return
     user_id = update.effective_user.id
-    text = update.message.text or ""
-    if not text.strip():
+    text = (update.message.text or "").strip()
+    if not text:
         await update.message.reply_text("Напиши текстом, пожалуйста.")
         return
-    await _reply_to_user(update, context, user_id, text.strip())
+
+    # Сохраняем выбор продукта/тарифа и при текстовом ответе (напр. «ВИП», «Групповые занятия»),
+    # чтобы кнопка «Оплатить» потом работала.
+    _apply_product_and_tariff_from_text(context, text)
+
+    await _reply_to_user(update, context, user_id, text)
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -699,6 +742,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not user_text:
         await update.message.reply_text("Текст не распознан. Попробуй ещё раз или напиши.")
         return
+
+    _apply_product_and_tariff_from_text(context, user_text)
 
     await update.message.reply_text(f"🎤 Ты сказал(а): {user_text}")
     await _reply_to_user(update, context, user_id, user_text)
