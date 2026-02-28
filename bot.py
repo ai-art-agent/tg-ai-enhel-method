@@ -9,11 +9,13 @@ Telegram-бот «ИИ-психолог» с ответами через DeepSee
 import os
 import re
 import html
+import json
 import logging
 import tempfile
+import time
 import asyncio
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, Callable
 
 from robokassa_integration import (
     PaymentsDB,
@@ -43,15 +45,27 @@ BOT_DESCRIPTION = "Вижу, что ты хочешь поговорить. Я �
 
 # Путь к файлу с системным промптом (рядом с bot.py).
 _PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_prompt.txt")
+_VALIDATOR_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "validator_prompt.txt")
+_SIMULATOR_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_simulator_prompt.txt")
+
+load_dotenv()
+# Максимальный размер ответа в символах (для промптов). В system_prompt.txt и validator_prompt.txt
+# используйте плейсхолдер {{MAX_RESPONSE_CHARS}} — он подставится при загрузке. Можно задать в .env.
+try:
+    MAX_RESPONSE_CHARS = int(os.getenv("MAX_RESPONSE_CHARS", "350"))
+except (TypeError, ValueError):
+    MAX_RESPONSE_CHARS = 350
+PLACEHOLDER_MAX_RESPONSE = "{{MAX_RESPONSE_CHARS}}"
 
 
 def _load_system_prompt() -> str:
-    """Загружает системный промпт из файла system_prompt.txt."""
+    """Загружает системный промпт из файла system_prompt.txt. Подставляет {{MAX_RESPONSE_CHARS}}."""
     try:
         with open(_PROMPT_PATH, encoding="utf-8") as f:
             content = f.read().strip()
         if not content:
             raise ValueError("Файл system_prompt.txt пуст.")
+        content = content.replace(PLACEHOLDER_MAX_RESPONSE, str(MAX_RESPONSE_CHARS))
         return content
     except FileNotFoundError:
         raise ValueError(
@@ -63,6 +77,45 @@ def _load_system_prompt() -> str:
 
 
 SYSTEM_PROMPT = _load_system_prompt()
+
+
+def _load_validator_prompt() -> str:
+    """Загружает промпт валидатора из validator_prompt.txt. Подставляет {{MAX_RESPONSE_CHARS}}."""
+    try:
+        with open(_VALIDATOR_PROMPT_PATH, encoding="utf-8") as f:
+            content = f.read().strip()
+        if not content:
+            return ""
+        content = content.replace(PLACEHOLDER_MAX_RESPONSE, str(MAX_RESPONSE_CHARS))
+        return content
+    except FileNotFoundError:
+        logging.warning("Файл validator_prompt.txt не найден, валидация отключена.")
+        return ""
+    except OSError as e:
+        logging.warning("Не удалось прочитать validator_prompt.txt: %s", e)
+        return ""
+
+
+VALIDATOR_PROMPT = _load_validator_prompt()
+VALIDATOR_ENABLED = bool(VALIDATOR_PROMPT)
+MAX_VALIDATION_RETRIES = 2
+
+
+def _load_simulator_prompt() -> str:
+    """Загружает промпт симулятора пользователя из user_simulator_prompt.txt (для автодиалога «два бота»)."""
+    try:
+        with open(_SIMULATOR_PROMPT_PATH, encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        logging.warning("Файл user_simulator_prompt.txt не найден, автодиалог недоступен.")
+        return ""
+    except OSError as e:
+        logging.warning("Не удалось прочитать user_simulator_prompt.txt: %s", e)
+        return ""
+
+
+SIMULATOR_PROMPT = _load_simulator_prompt()
+SIMULATOR_ENABLED = bool(SIMULATOR_PROMPT)
 
 # История диалога: сколько последних пар сообщений хранить (Этап 4). 0 = не хранить.
 MAX_HISTORY_MESSAGES = 10
@@ -190,8 +243,6 @@ CALLBACK_DATA_MAX_BYTES = 64
 LIST_MARKER = "➖"
 
 # ============== КОД БОТА ==============
-
-load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
@@ -337,6 +388,53 @@ def get_history_messages(user_id: int) -> list[dict]:
     for item in user_history[user_id]:
         messages.append({"role": item["role"], "content": item["content"]})
     return messages
+
+
+async def _validate_reply(reply_raw: str) -> tuple[bool, list[str], list[str], str]:
+    """
+    Проверяет ответ основной модели через промпт-валидатор.
+    Возвращает (valid, errors, recommendations, raw_response). При сбое валидации считаем ответ валидным.
+    """
+    if not VALIDATOR_ENABLED or not reply_raw or not reply_raw.strip():
+        return True, [], [], ""
+    try:
+        response = await client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            messages=[
+                {"role": "system", "content": VALIDATOR_PROMPT},
+                {"role": "user", "content": f"ANSWER:\n{reply_raw}"},
+            ],
+            max_tokens=500,
+            temperature=0,
+        )
+        raw_text = (response.choices[0].message.content or "").strip()
+        text = raw_text
+        # Убрать обёртку ```json ... ```
+        if "```" in text:
+            for part in re.split(r"```\w*", text):
+                part = part.strip()
+                if part.startswith("{"):
+                    text = part
+                    break
+        data = json.loads(text)
+        valid = data.get("valid", True)
+        errors = data.get("errors") or []
+        if isinstance(errors, list):
+            errors = [str(e) for e in errors]
+        else:
+            errors = [str(errors)] if errors else []
+        recommendations = data.get("recommendations") or []
+        if isinstance(recommendations, list):
+            recommendations = [str(r) for r in recommendations]
+        else:
+            recommendations = [str(recommendations)] if recommendations else []
+        return bool(valid), errors, recommendations, raw_text
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        logging.warning("Валидатор вернул невалидный JSON: %s", e)
+        return True, [], [], ""
+    except Exception as e:
+        logging.warning("Ошибка валидатора: %s", e)
+        return True, [], [], ""
 
 
 def add_to_history(user_id: int, role: str, content: str) -> None:
@@ -587,13 +685,171 @@ async def send_payment_link(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         disable_web_page_preview=True,
     )
 
+
+async def _generate_reply(msgs: list[dict], stream: bool = False, on_chunk: Optional[Callable[[str], None]] = None) -> str:
+    """Генерация ответа модели. При stream=True и on_chunk вызывается on_chunk(accumulated) для каждого фрагмента."""
+    if stream:
+        stream_obj = await client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            messages=msgs,
+            max_tokens=4800,
+            temperature=1.75,
+            stream=True,
+        )
+        accumulated = ""
+        async for chunk in stream_obj:
+            if chunk.choices and chunk.choices[0].delta.content:
+                accumulated += chunk.choices[0].delta.content
+                if on_chunk:
+                    try:
+                        on_chunk(accumulated)
+                    except Exception:
+                        pass
+        return truncate_response(accumulated.strip()) or "Не удалось сформировать ответ."
+    response = await client.chat.completions.create(
+        model=DEEPSEEK_MODEL,
+        messages=msgs,
+        max_tokens=4800,
+        temperature=1.75,
+        stream=False,
+    )
+    raw = response.choices[0].message.content or ""
+    return truncate_response(raw.strip()) or "Не удалось сформировать ответ."
+
+
+async def get_bot_reply(
+    user_id: int,
+    user_text: str,
+    context: Optional[ContextTypes.DEFAULT_TYPE] = None,
+    log_validator_full: bool = False,
+    validator_callback: Optional[Callable[[str], None]] = None,
+    stream_callback: Optional[Callable[[str], None]] = None,
+):
+    """
+    Один шаг диалога без Telegram. Возвращает (reply_clean, buttons, validator_outputs, timings).
+    validator_outputs: список (raw_validator, reply_raw, validator_ms).
+    timings: {"psychologist_ms": int}.
+    stream_callback(text_so_far): при задании ответ психолога стримится по фрагментам.
+    """
+    add_to_history(user_id, "user", user_text)
+    messages = get_history_messages(user_id)
+    use_stream = stream_callback is not None
+    t0_psych = time.monotonic()
+    reply_raw = await _generate_reply(
+        messages, stream=use_stream, on_chunk=stream_callback if use_stream else None
+    )
+    psychologist_ms = int((time.monotonic() - t0_psych) * 1000)
+
+    validator_outputs = []
+    retries = 0
+    while VALIDATOR_ENABLED and retries <= MAX_VALIDATION_RETRIES:
+        t0_val = time.monotonic()
+        valid, errors, recommendations, raw_validator = await _validate_reply(reply_raw)
+        validator_ms = int((time.monotonic() - t0_val) * 1000)
+        if log_validator_full and raw_validator:
+            logging.info("Валидатор (полный ответ): %s", raw_validator)
+        if raw_validator:
+            validator_outputs.append((raw_validator, reply_raw, validator_ms))
+        if validator_callback and raw_validator:
+            try:
+                validator_callback(raw_validator)
+            except Exception:
+                pass
+        if valid:
+            if retries > 0:
+                logging.info("Валидатор: ответ принят после перегенерации (попытка %d).", retries + 1)
+            break
+        if retries >= MAX_VALIDATION_RETRIES:
+            logging.info(
+                "Валидатор: исчерпан лимит перегенераций (%d), оставляем последний ответ. Ошибки: %s",
+                MAX_VALIDATION_RETRIES,
+                "; ".join(errors) if errors else "—",
+            )
+            break
+        logging.info(
+            "Валидатор: ответ отклонён — %s. Перегенерация %d/%d.",
+            "; ".join(errors) if errors else "—",
+            retries + 1,
+            MAX_VALIDATION_RETRIES,
+        )
+        retry_parts = ["Твой ответ отклонён."]
+        if errors:
+            retry_parts.append("Нарушения: " + "; ".join(errors) + ".")
+        if recommendations:
+            retry_parts.append("Рекомендации: " + "; ".join(recommendations) + ".")
+        retry_parts.append("Ответь заново, исправив перечисленное.")
+        retry_messages = messages + [
+            {"role": "assistant", "content": reply_raw},
+            {"role": "user", "content": " ".join(retry_parts)},
+        ]
+        t0_retry = time.monotonic()
+        reply_raw = await _generate_reply(retry_messages, stream=False)
+        psychologist_ms += int((time.monotonic() - t0_retry) * 1000)
+        retries += 1
+        messages = retry_messages
+
+    reply_clean, step_id = _parse_step_from_reply(reply_raw)
+    keyboard = _keyboard_for_step(step_id, context) if step_id else None
+    if keyboard is None:
+        reply_clean, keyboard = _parse_custom_buttons(reply_clean)
+    add_to_history(user_id, "assistant", reply_clean or "")
+    buttons = []
+    if keyboard and hasattr(keyboard, "inline_keyboard"):
+        for row in keyboard.inline_keyboard:
+            for btn in row:
+                buttons.append((getattr(btn, "text", ""), getattr(btn, "callback_data", "")))
+    timings = {"psychologist_ms": psychologist_ms}
+    return (reply_clean or "").strip(), buttons, validator_outputs, timings
+
+
+def _is_terminal_action(simulator_message: str) -> bool:
+    """Проверяет, что симулятор выбрал оплату или отказ — диалог можно завершать и запрашивать SHOW_JSON."""
+    s = (simulator_message or "").strip()
+    return s.startswith("pay:") or s in ("Еще думаю", "Оплатить")
+
+
+async def get_simulator_reply(user_id: int, buttons: list[tuple]) -> str:
+    """
+    Один ответ «пользователя» от второго бота (симулятор). Используется в автодиалоге «два бота».
+    Возвращает одну строку: либо текст от имени пользователя, либо callback_data кнопки.
+    """
+    if not SIMULATOR_ENABLED:
+        raise RuntimeError("Симулятор отключён: отсутствует user_simulator_prompt.txt")
+    messages = get_history_messages(user_id)
+    # Без system, только диалог
+    parts = []
+    for m in messages:
+        if m.get("role") == "system":
+            continue
+        who = "Психолог" if m.get("role") == "assistant" else "Пользователь"
+        parts.append(f"{who}: {m.get('content', '')}")
+    conv = "\n\n".join(parts)
+    if buttons:
+        lines = [f"- {label} -> {cb}" for label, cb in buttons]
+        conv += "\n\nТекущие кнопки (ответь ровно одним callback_data или своим текстом):\n" + "\n".join(lines)
+    else:
+        conv += "\n\nКнопок нет. Ответь текстом от имени пользователя."
+    response = await client.chat.completions.create(
+        model=DEEPSEEK_MODEL,
+        messages=[
+            {"role": "system", "content": SIMULATOR_PROMPT},
+            {"role": "user", "content": conv},
+        ],
+        max_tokens=200,
+        temperature=0.7,
+    )
+    raw = (response.choices[0].message.content or "").strip()
+    # Одна строка: берём первую, обрезаем по переносу
+    return raw.split("\n")[0].strip() if raw else ""
+
+
 async def _reply_to_user(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     user_id: int,
     user_text: str,
 ) -> None:
-    """Общая логика: добавить в историю, вызвать DeepSeek, отправить ответ (с потоком или без)."""
+    """Общая логика: добавить в историю, вызвать DeepSeek, при необходимости перегенерировать по валидатору, отправить ответ."""
     add_to_history(user_id, "user", user_text)
     messages = get_history_messages(user_id)
     target = _get_reply_target(update)
@@ -604,98 +860,82 @@ async def _reply_to_user(
     await chat.send_action("typing")
 
     try:
-        if STREAM_RESPONSE:
-            stream = await client.chat.completions.create(
-                model=DEEPSEEK_MODEL,
-                messages=messages,
-                max_tokens=4800,
-                temperature=1.75,
-                stream=True,
-            )
-            accumulated = ""
-            sent_msg = await target.reply_text("…")
-            last_edit = 0.0
-            edit_interval = 0.4
+        sent_msg = await target.reply_text("…")
+        reply_raw = await _generate_reply(messages, stream=STREAM_RESPONSE)
 
-            async for chunk in stream:
-                if not chunk.choices or not chunk.choices[0].delta.content:
-                    continue
-                accumulated += chunk.choices[0].delta.content
-                now = asyncio.get_event_loop().time()
-                if now - last_edit >= edit_interval or len(accumulated) < 50:
-                    last_edit = now
-                    try:
-                        text = truncate_response(accumulated.strip()) or "…"
-                        text = _strip_step_tags_for_display(text)
-                        if len(text) > 4096:
-                            text = text[:4093] + "..."
-                        await sent_msg.edit_text(text)
-                    except Exception:
-                        pass
-
-            reply_raw = truncate_response(accumulated.strip())
-            if not reply_raw:
-                reply_raw = "Не удалось сформировать ответ."
-            reply_clean, step_id = _parse_step_from_reply(reply_raw)
-            keyboard = _keyboard_for_step(step_id, context) if step_id else None
-            if keyboard is None:
-                reply_clean, keyboard = _parse_custom_buttons(reply_clean)
-            final_text = reply_clean[:4096] if len(reply_clean) > 4096 else reply_clean
-            final_text, parse_mode = _format_reply_for_telegram(final_text)
-            if len(final_text) > 4096:
-                final_text = final_text[:4093] + "..."
-            try:
-                await sent_msg.edit_text(
-                    final_text,
-                    parse_mode=parse_mode if parse_mode else None,
-                    reply_markup=keyboard,
+        # Валидация и при необходимости перегенерация (пользователь не видит процесс)
+        retries = 0
+        while VALIDATOR_ENABLED and retries <= MAX_VALIDATION_RETRIES:
+            valid, errors, recommendations, _ = await _validate_reply(reply_raw)
+            if valid:
+                if retries > 0:
+                    logging.info("Валидатор: ответ принят после перегенерации (попытка %d).", retries + 1)
+                break
+            if retries >= MAX_VALIDATION_RETRIES:
+                logging.info(
+                    "Валидатор: исчерпан лимит перегенераций (%d), оставляем последний ответ. Ошибки: %s",
+                    MAX_VALIDATION_RETRIES,
+                    "; ".join(errors) if errors else "—",
                 )
-            except Exception:
-                pass
-            add_to_history(user_id, "assistant", reply_clean or "")
-        else:
-            response = await client.chat.completions.create(
-                model=DEEPSEEK_MODEL,
-                messages=messages,
-                max_tokens=800,
-                temperature=0.7,
-                stream=False,
+                break
+            logging.info(
+                "Валидатор: ответ отклонён — %s. Перегенерация %d/%d.",
+                "; ".join(errors) if errors else "—",
+                retries + 1,
+                MAX_VALIDATION_RETRIES,
             )
-            reply_raw = response.choices[0].message.content or ""
-            reply_raw = truncate_response(reply_raw.strip())
-            reply_clean, step_id = _parse_step_from_reply(reply_raw)
-            keyboard = _keyboard_for_step(step_id, context) if step_id else None
-            if keyboard is None:
-                reply_clean, keyboard = _parse_custom_buttons(reply_clean)
-            final_text = reply_clean[:4096] if len(reply_clean) > 4096 else reply_clean
-            final_text, parse_mode = _format_reply_for_telegram(final_text)
-            if len(final_text) > 4096:
-                final_text = final_text[:4093] + "..."
-            await target.reply_text(
+            retry_parts = ["Твой ответ отклонён."]
+            if errors:
+                retry_parts.append("Нарушения: " + "; ".join(errors) + ".")
+            if recommendations:
+                retry_parts.append("Рекомендации: " + "; ".join(recommendations) + ".")
+            retry_parts.append("Ответь заново, исправив перечисленное.")
+            retry_messages = messages + [
+                {"role": "assistant", "content": reply_raw},
+                {"role": "user", "content": " ".join(retry_parts)},
+            ]
+            reply_raw = await _generate_reply(retry_messages, stream=False)
+            retries += 1
+            messages = retry_messages
+
+        reply_clean, step_id = _parse_step_from_reply(reply_raw)
+        keyboard = _keyboard_for_step(step_id, context) if step_id else None
+        if keyboard is None:
+            reply_clean, keyboard = _parse_custom_buttons(reply_clean)
+        final_text = reply_clean[:4096] if len(reply_clean) > 4096 else reply_clean
+        final_text, parse_mode = _format_reply_for_telegram(final_text)
+        if len(final_text) > 4096:
+            final_text = final_text[:4093] + "..."
+
+        try:
+            await sent_msg.edit_text(
                 final_text,
                 parse_mode=parse_mode if parse_mode else None,
                 reply_markup=keyboard,
             )
-            add_to_history(user_id, "assistant", reply_clean or "")
+        except Exception:
+            pass
+        add_to_history(user_id, "assistant", reply_clean or "")
     except APIStatusError as e:
         if user_history[user_id]:
             user_history[user_id].pop()
-        if e.status_code == 402:
-            logging.warning("DeepSeek API: 402 Payment Required (Insufficient Balance). %s", e)
-            await target.reply_text(
-                "Сейчас сервис ответов временно недоступен (исчерпан баланс API). "
-                "Попробуй позже или обратись к администратору бота."
-            )
-        else:
-            logging.exception("DeepSeek API error: %s", e)
-            await target.reply_text("Что-то пошло не так при ответе. Попробуй ещё раз или позже.")
+        err_text = (
+            "Сейчас сервис ответов временно недоступен (исчерпан баланс API). Попробуй позже или обратись к администратору бота."
+            if e.status_code == 402
+            else "Что-то пошло не так при ответе. Попробуй ещё раз или позже."
+        )
+        try:
+            await sent_msg.edit_text(err_text)
+        except Exception:
+            await target.reply_text(err_text)
     except Exception as e:
         logging.exception("DeepSeek API error: %s", e)
         if user_history[user_id]:
             user_history[user_id].pop()
-        await target.reply_text(
-            "Что-то пошло не так при ответе. Попробуй ещё раз или позже."
-        )
+        try:
+            await sent_msg.edit_text("Что-то пошло не так при ответе. Попробуй ещё раз или позже.")
+        except Exception:
+            await target.reply_text("Что-то пошло не так при ответе. Попробуй ещё раз или позже.")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

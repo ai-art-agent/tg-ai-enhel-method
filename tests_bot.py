@@ -94,6 +94,90 @@ def test_7_load_prompt_file():
     return True
 
 
+# ---- Тесты тестового UI (test_dialog_ui.py): проверка, что весь функционал доступен без auto_dialog.py ----
+
+def test_ui_1_module_has_main():
+    """Тестовый UI: модуль test_dialog_ui имеет функцию main()."""
+    import test_dialog_ui
+    assert hasattr(test_dialog_ui, 'main'), 'test_dialog_ui.main отсутствует'
+    assert callable(test_dialog_ui.main), 'test_dialog_ui.main не вызываема'
+    return True
+
+
+def test_ui_2_entry_point_when_run_as_script():
+    """Тестовый UI: при запуске как скрипт (python test_dialog_ui.py) вызывается main()."""
+    import ast
+    import test_dialog_ui
+    path = getattr(test_dialog_ui, '__file__', None)
+    assert path and path.endswith('test_dialog_ui.py'), 'Не найден файл модуля'
+    with open(path, encoding='utf-8') as f:
+        tree = ast.parse(f.read())
+    main_calls = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If):
+            if (isinstance(node.test, ast.Compare) and
+                    isinstance(node.test.left, ast.Name) and
+                    node.test.left.id == '__name__' and
+                    isinstance(node.test.comparators[0], ast.Constant) and
+                    node.test.comparators[0].value == '__main__'):
+                for stmt in node.body:
+                    if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+                        if isinstance(stmt.value.func, ast.Name) and stmt.value.func.id == 'main':
+                            main_calls.append(True)
+    assert main_calls, 'В блоке if __name__ == "__main__" нет вызова main()'
+    return True
+
+
+def test_ui_3_bot_exports_required_by_ui():
+    """Тестовый UI: бот экспортирует все функции/переменные, которые импортирует UI."""
+    import bot
+    required = ('get_bot_reply', 'clear_history', 'get_simulator_reply', 'SIMULATOR_ENABLED')
+    for name in required:
+        assert hasattr(bot, name), f'В bot отсутствует {name}, нужный тестовому UI'
+    assert callable(bot.get_bot_reply)
+    assert callable(bot.clear_history)
+    assert callable(bot.get_simulator_reply)
+    return True
+
+
+def test_ui_4_run_async_in_thread():
+    """Тестовый UI: run_async_in_thread передаёт очередь в runner и возвращает очередь с результатом."""
+    import queue
+    import time
+    import test_dialog_ui
+    result = []
+
+    def fake_runner(q):
+        q.put(("tech", "ok"))
+        q.put(("done", None))
+
+    q = test_dialog_ui.run_async_in_thread(fake_runner)
+    assert isinstance(q, queue.Queue)
+    for _ in range(50):
+        try:
+            kind, payload = q.get(timeout=0.2)
+            result.append((kind, payload))
+            if kind == "done":
+                break
+        except queue.Empty:
+            time.sleep(0.05)
+    assert ("tech", "ok") in result
+    assert ("done", None) in result
+    return True
+
+
+def test_ui_5_no_auto_dialog_import():
+    """Тестовый UI: не импортирует auto_dialog (запуск только через test_dialog_ui.py)."""
+    import test_dialog_ui
+    path = getattr(test_dialog_ui, '__file__', '')
+    assert path.endswith('test_dialog_ui.py'), 'Должен быть загружен именно test_dialog_ui'
+    with open(path, encoding='utf-8') as f:
+        src = f.read()
+    assert 'import auto_dialog' not in src and 'from auto_dialog' not in src, \
+        'test_dialog_ui не должен импортировать auto_dialog'
+    return True
+
+
 if __name__ == '__main__':
     tests = [
         ('Import, prompt, STEP_KEYBOARDS', test_1_import_and_prompt),
@@ -103,6 +187,11 @@ if __name__ == '__main__':
         ('callback_data length and format', test_5_callback_length_and_format),
         ('New step buttons (insight_next, readiness, products, pay_choice, webinar_offer)', test_6_new_step_buttons),
         ('Load prompt file and content', test_7_load_prompt_file),
+        ('UI: module has main()', test_ui_1_module_has_main),
+        ('UI: __main__ entry point calls main()', test_ui_2_entry_point_when_run_as_script),
+        ('UI: bot exports required by UI', test_ui_3_bot_exports_required_by_ui),
+        ('UI: run_async_in_thread works', test_ui_4_run_async_in_thread),
+        ('UI: no auto_dialog dependency', test_ui_5_no_auto_dialog_import),
     ]
     scores = []
     for name, fn in tests:
