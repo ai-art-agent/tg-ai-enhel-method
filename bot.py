@@ -180,6 +180,8 @@ PRODUCTS = {
 # Парсинг тега [STEP:step_id] в ответе модели. Ищем последнее вхождение, чтобы кнопки показывались
 # даже если модель добавила текст после тега или пробел после двоеточия.
 STEP_TAG_REGEX = re.compile(r"\[STEP:\s*(\w+)\]", re.IGNORECASE)
+# Удаляем любой [STEP:xxx] из текста перед показом пользователю (тег служебный).
+STEP_TAG_ANYWHERE = re.compile(r"\s*\[STEP:\s*\w+\]\s*", re.IGNORECASE)
 # Автогенерация кнопок: [BUTTONS: Текст1 | Текст2 | Текст3] (до 4 кнопок, до 64 байт на callback_data).
 BUTTONS_TAG_REGEX = re.compile(r"\s*\[BUTTONS:\s*([^\]]+)\]", re.IGNORECASE)
 CALLBACK_DATA_MAX_BYTES = 64
@@ -244,6 +246,14 @@ def _get_reply_target(update: Update):
     return None
 
 
+def _strip_step_tags_for_display(text: str) -> str:
+    """Удаляет все [STEP:xxx] из текста, чтобы служебный тег не показывался пользователю."""
+    if not text or not text.strip():
+        return text
+    out = STEP_TAG_ANYWHERE.sub(" ", text)
+    return re.sub(r"\s+", " ", out).strip() or "…"
+
+
 def _parse_step_from_reply(reply: str) -> tuple[str, Optional[str]]:
     """Ищет последнее вхождение [STEP:step_id] в ответе, убирает его и всё после него; возвращает (очищенный текст, step_id или None)."""
     matches = list(STEP_TAG_REGEX.finditer(reply))
@@ -256,6 +266,9 @@ def _parse_step_from_reply(reply: str) -> tuple[str, Optional[str]]:
     # Для [STEP:custom] после тега идёт [BUTTONS: ...] — оставляем хвост для _parse_custom_buttons.
     if step_id == "custom":
         reply_clean = (reply_clean + " " + reply[last.end() :].lstrip()).strip()
+    # Убираем любой оставшийся [STEP:xxx] из текста (модель могла вставить тег в начало или середину).
+    reply_clean = STEP_TAG_ANYWHERE.sub(" ", reply_clean)
+    reply_clean = re.sub(r"\s+", " ", reply_clean).strip()
     return reply_clean, step_id
 
 
@@ -613,6 +626,7 @@ async def _reply_to_user(
                     last_edit = now
                     try:
                         text = truncate_response(accumulated.strip()) or "…"
+                        text = _strip_step_tags_for_display(text)
                         if len(text) > 4096:
                             text = text[:4093] + "..."
                         await sent_msg.edit_text(text)
