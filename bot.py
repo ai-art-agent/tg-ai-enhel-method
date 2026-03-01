@@ -872,8 +872,9 @@ async def _reply_to_user(
     try:
         sent_msg = await target.reply_text("…")
 
-        # Потоковый вывод: обновляем сообщение по мере появления текста (троттлинг ~0.4 с)
+        # Потоковый вывод только для последней попытки (не подлежащей корректировке валидатором). Троттлинг ~0.2 с.
         last_stream_edit = [0.0]
+        STREAM_THROTTLE_SEC = 0.2
 
         async def stream_edit(accumulated: str) -> None:
             display, _ = _parse_step_from_reply(accumulated)
@@ -881,14 +882,15 @@ async def _reply_to_user(
             if len(display) > 4090:
                 display = display[:4090] + "..."
             now = time.monotonic()
-            if now - last_stream_edit[0] >= 0.4 or not last_stream_edit[0]:
+            if now - last_stream_edit[0] >= STREAM_THROTTLE_SEC or not last_stream_edit[0]:
                 try:
                     await sent_msg.edit_text(display or "…")
                     last_stream_edit[0] = now
                 except Exception:
                     pass
 
-        reply_raw = await _generate_reply(messages, stream=STREAM_RESPONSE, on_chunk=stream_edit)
+        # Первая попытка — без стрима (будет валидироваться)
+        reply_raw = await _generate_reply(messages, stream=False)
 
         # Валидация и при необходимости перегенерация
         retries = 0
@@ -921,7 +923,7 @@ async def _reply_to_user(
                 {"role": "assistant", "content": reply_raw},
                 {"role": "user", "content": " ".join(retry_parts)},
             ]
-            # Вторую (и последнюю) попытку тоже показываем потоково
+            # В последовательный (потоковый) вывод передаём только последнюю попытку — она не валидируется
             try:
                 await sent_msg.edit_text("…")
             except Exception:
