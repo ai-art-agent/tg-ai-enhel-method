@@ -277,12 +277,44 @@ def verify_result_url(params: dict[str, Any], *, cfg: RobokassaConfig) -> dict[s
     if out_sum is None or inv_id is None or sig is None:
         raise ValueError("Не хватает параметров OutSum/InvId/SignatureValue")
 
-    out_sum_s = _to_amount_str(str(out_sum))
+    # Для подписи используем OutSum в том виде, как прислала Робокасса (иначе не совпадёт).
+    # Например, при OutSum=2990 они считают MD5 от "2990:...", а не от "2990.00:..."
+    out_sum_raw = str(out_sum).strip()
+    out_sum_s = _to_amount_str(out_sum_raw)
     inv_id_i = int(str(inv_id))
     shp = _extract_shp(normalized)
 
-    sig_str = f"{out_sum_s}:{inv_id_i}:{cfg.password2}{_shp_signature_part(shp)}"
+    # Строка для подписи: OutSum и InvId в том формате, как в запросе
+    sig_str = f"{out_sum_raw}:{inv_id_i}:{cfg.password2}{_shp_signature_part(shp)}"
     expected = _md5_hex(sig_str)
+    # #region agent log
+    try:
+        _log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug-15b236.log")
+        with open(_log_path, "a", encoding="utf-8") as _f:
+            _f.write(
+                json.dumps(
+                    {
+                        "id": "verify_result_url",
+                        "timestamp": time.time(),
+                        "message": "ResultURL signature check",
+                        "data": {
+                            "out_sum_raw": out_sum_raw,
+                            "out_sum_normalized": out_sum_s,
+                            "inv_id": inv_id_i,
+                            "shp_keys": sorted(shp.keys()) if shp else [],
+                            "expected_sig": expected,
+                            "received_sig": str(sig),
+                            "match": str(sig).lower() == expected.lower(),
+                        },
+                        "hypothesisId": "H-outsum",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
     if str(sig).lower() != expected.lower():
         raise ValueError("Неверная подпись Robokassa (ResultURL)")
 
