@@ -874,7 +874,7 @@ async def _reply_to_user(
 
         # Потоковый вывод только для последней попытки (не подлежащей корректировке валидатором). Троттлинг ~0.2 с.
         last_stream_edit = [0.0]
-        STREAM_THROTTLE_SEC = 0.2
+        STREAM_THROTTLE_SEC = 0.4
 
         async def stream_edit(accumulated: str) -> None:
             display, _ = _parse_step_from_reply(accumulated)
