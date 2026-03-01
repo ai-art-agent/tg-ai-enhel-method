@@ -4,7 +4,7 @@ from __future__ import annotations
 HTTP-сервер Robokassa для развёртывания на ВМ (Yandex Compute Cloud).
 
 Эндпоинты:
-  POST /robokassa/result  — ResultURL (server-to-server), возвращает "OK{InvId}" или "ERROR"
+  GET/POST /robokassa/result — ResultURL (server-to-server); метод задаётся в настройках магазина Робокассы. Возвращает "OK{InvId}" или "ERROR"
   GET  /robokassa/success — SuccessURL (редирект после оплаты)
   GET  /robokassa/fail    — FailURL (отмена/ошибка оплаты)
 
@@ -15,6 +15,9 @@ HTTP-сервер Robokassa для развёртывания на ВМ (Yandex 
   Result URL  = http://ВАШ_IP:8000/robokassa/result
   Success URL = http://ВАШ_IP:8000/robokassa/success
   Fail URL    = http://ВАШ_IP:8000/robokassa/fail
+
+Предупреждения uvicorn «Invalid HTTP request received» в логах подавляются фильтром:
+они обычно вызваны сканерами/обрывами соединений и не влияют на оплату.
 
 Документация: https://docs.robokassa.ru/ru/notifications-and-redirects
 При фильтрации по IP разрешите: 185.59.216.65, 185.59.217.65
@@ -44,6 +47,24 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
+
+class _SuppressInvalidHTTPFilter(logging.Filter):
+    """Скрывает предупреждение uvicorn «Invalid HTTP request received».
+
+    Оно возникает при невалидном/оборванном HTTP (сканеры, боты, обрывы соединения)
+    и не связано с работой ResultURL/SuccessURL. Сервер при этом обрабатывает запросы нормально.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage() if record.msg else str(record.msg)
+        if "Invalid HTTP request received" in msg:
+            return False
+        return True
+
+
+# Применяем к логгеру uvicorn, чтобы не засорять журнал
+logging.getLogger("uvicorn.error").addFilter(_SuppressInvalidHTTPFilter())
+
 app = FastAPI()
 
 
@@ -66,7 +87,7 @@ async def _collect_params(request: Request) -> Dict[str, Any]:
     return params
 
 
-@app.post("/robokassa/result")
+@app.api_route("/robokassa/result", methods=["GET", "POST"])
 async def robokassa_result(request: Request) -> PlainTextResponse:
     """
     ResultURL: подтверждение оплаты от Robokassa.

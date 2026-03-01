@@ -232,11 +232,11 @@ PRODUCTS = {
 # Формат анкеты (outcome) — совпадает с system_prompt.txt. При сохранении анкет/БД клиентов
 # использовать те же ключи: readiness, product, tariff, preferred_contact_time, preferred_group_start.
 
-# Парсинг тега [STEP:step_id] в ответе модели. Ищем последнее вхождение, чтобы кнопки показывались
-# даже если модель добавила текст после тега или пробел после двоеточия.
-STEP_TAG_REGEX = re.compile(r"\[STEP:\s*(\w+)\]", re.IGNORECASE)
+# Парсинг тега [STEP:step_id] или [STEP:step_id:product] в ответе модели. Ищем последнее вхождение.
+# Для pay_choice допускается [STEP:pay_choice:webinar] / [STEP:pay_choice:group_vip] и т.д., чтобы кнопка «Оплатить» вела на нужный продукт.
+STEP_TAG_REGEX = re.compile(r"\[STEP:\s*([\w:]+)\]", re.IGNORECASE)
 # Удаляем любой [STEP:xxx] из текста перед показом пользователю (тег служебный).
-STEP_TAG_ANYWHERE = re.compile(r"\s*\[STEP:\s*\w+\]\s*", re.IGNORECASE)
+STEP_TAG_ANYWHERE = re.compile(r"\s*\[STEP:\s*[\w:]+\]\s*", re.IGNORECASE)
 # Автогенерация кнопок: [BUTTONS: Текст1 | Текст2 | Текст3] (до 4 кнопок, до 64 байт на callback_data).
 BUTTONS_TAG_REGEX = re.compile(r"\s*\[BUTTONS:\s*([^\]]+)\]", re.IGNORECASE)
 CALLBACK_DATA_MAX_BYTES = 64
@@ -339,8 +339,13 @@ def _keyboard_for_step(step_id: str, context: Optional[ContextTypes.DEFAULT_TYPE
         rows = [[(label, callback), ("Еще подумаю", "Еще подумаю")]]
         return InlineKeyboardMarkup([[InlineKeyboardButton(str(btn_label), callback_data=str(btn_cb)) for btn_label, btn_cb in row] for row in rows])
 
-    if step_id == "pay_choice" and context:
+    if (step_id == "pay_choice" or step_id.startswith("pay_choice:")) and context:
         product_code = context.user_data.get("selected_product")
+        # Явный продукт в теге: [STEP:pay_choice:webinar] или [STEP:pay_choice:group_vip] — приоритет над context
+        if ":" in step_id:
+            parts = step_id.split(":", 1)
+            if len(parts) == 2 and parts[1] in PRODUCTS:
+                product_code = parts[1]
         if product_code == "group":
             product_code = "group_vip" if context.user_data.get("group_tariff") == "vip" else "group_standard"
         if product_code and product_code in PRODUCTS:
