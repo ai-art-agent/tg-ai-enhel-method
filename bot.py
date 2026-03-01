@@ -874,7 +874,7 @@ async def _reply_to_user(
 
         # Потоковый вывод: первая попытка и при перегенерации — оба стримятся. Троттлинг ~0.2 с.
         last_stream_edit = [0.0]
-        STREAM_THROTTLE_SEC = 0.2
+        STREAM_THROTTLE_SEC = 0.05
 
         async def stream_edit(accumulated: str) -> None:
             display, _ = _parse_step_from_reply(accumulated)
