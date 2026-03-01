@@ -592,6 +592,10 @@ async def handle_step_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await send_payment_link(update, context, product_code_override=product_code)
             return
 
+    # «Еще думаю» — сохраняем анкету из контекста (отказ от оплаты), затем продолжаем диалог.
+    if user_text == "Еще думаю":
+        _save_anket_after_refusal(update, context)
+
     await _reply_to_user(update, context, user_id, user_text)
 
 
@@ -769,6 +773,120 @@ async def get_simulator_reply(user_id: int, buttons: list[tuple]) -> str:
     return raw.split("\n")[0].strip() if raw else ""
 
 
+def _extract_anket_json_from_reply(reply_text: str) -> dict | None:
+    """Извлекает JSON анкеты из ответа модели (SHOW_JSON). Возвращает dict или None."""
+    if not reply_text or not isinstance(reply_text, str):
+        return None
+    text = reply_text.strip()
+    # Блок ```json ... ``` или ``` ... ```
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    if m:
+        try:
+            return json.loads(m.group(1).strip())
+        except (json.JSONDecodeError, TypeError):
+            pass
+    # Первый объект { ... }
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start : i + 1])
+                except (json.JSONDecodeError, TypeError):
+                    return None
+    return None
+
+
+def _anket_flat_from_parsed(parsed: dict, user_id: int, chat_id: int, username: str | None, first_name: str | None, last_name: str | None) -> dict:
+    """Сопоставляет распарсенный JSON анкеты (system_prompt) с плоскими полями для clients."""
+    contact = parsed.get("contact") or {}
+    profile = parsed.get("profile") or {}
+    diagnostic = parsed.get("diagnostic") or {}
+    outcome = parsed.get("outcome") or {}
+    return {
+        "user_id": user_id,
+        "chat_id": chat_id,
+        "username": (parsed.get("username") or username or "").strip() or None,
+        "first_name": (parsed.get("first_name") or first_name or "").strip() or None,
+        "last_name": (parsed.get("last_name") or last_name or "").strip() if (parsed.get("last_name") or last_name) else None,
+        "contact_channel": (contact.get("channel") or "").strip() or None,
+        "contact_value": (contact.get("value") or "").strip() or None,
+        "profile_name": (profile.get("name") or "").strip() or None,
+        "form_address": (profile.get("form_address") or "").strip() or None,
+        "age_group": (profile.get("age_group") or "").strip() or None,
+        "focus": (diagnostic.get("focus") or "").strip() or None,
+        "duration": (diagnostic.get("duration") or "").strip() or None,
+        "previous_attempts": (diagnostic.get("previous_attempts") or "").strip() or None,
+        "conflict": (diagnostic.get("conflict") or "").strip() or None,
+        "self_value_scale": diagnostic.get("self_value_scale") if isinstance(diagnostic.get("self_value_scale"), (int, float)) else None,
+        "insight": (diagnostic.get("insight") or "").strip() or None,
+        "readiness": (outcome.get("readiness") or "").strip() or None,
+        "product": (outcome.get("product") or "").strip() or None,
+        "tariff": (outcome.get("tariff") or "").strip() or None,
+        "preferred_contact_time": (outcome.get("preferred_contact_time") or "").strip() or None,
+        "preferred_group_start": (outcome.get("preferred_group_start") or "").strip() or None,
+        "anket_json": json.dumps(parsed, ensure_ascii=False) if parsed else None,
+    }
+
+
+def _save_anket_from_show_json(update: Update, reply_clean: str) -> None:
+    """После ответа на SHOW_JSON парсит JSON из ответа и сохраняет анкету в clients."""
+    if (reply_clean or "").strip() == "":
+        return
+    user = update.effective_user
+    chat = update.effective_chat
+    if not user or not chat:
+        return
+    parsed = _extract_anket_json_from_reply(reply_clean)
+    if not parsed or not isinstance(parsed, dict):
+        return
+    try:
+        db = PaymentsDB.from_env()
+        flat = _anket_flat_from_parsed(
+            parsed,
+            user_id=user.id,
+            chat_id=chat.id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name,
+        )
+        db.upsert_client(**{k: v for k, v in flat.items() if k != "user_id" and v is not None}, user_id=flat["user_id"])
+    except Exception as e:
+        logging.exception("Сохранение анкеты (SHOW_JSON): %s", e)
+
+
+def _save_anket_after_refusal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Сохраняет/обновляет анкету клиента после нажатия «Еще думаю» (отказ от оплаты).
+    Один клиент = одна строка по user_id (или username при необходимости).
+    """
+    user = update.effective_user
+    chat = update.effective_chat
+    if not user or not chat:
+        return
+    try:
+        db = PaymentsDB.from_env()
+        db.upsert_client(
+            user_id=user.id,
+            chat_id=chat.id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            form_address=context.user_data.get("form_address"),
+            product=context.user_data.get("selected_product"),
+            tariff=context.user_data.get("group_tariff"),
+            readiness="Еще подумаю",
+        )
+    except Exception as e:
+        logging.exception("Сохранение анкеты (Еще думаю): %s", e)
+
+
 async def _reply_to_user(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -859,6 +977,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Напиши текстом, пожалуйста.")
         return
 
+    # Служебная команда SHOW_JSON — не передаём в модель, клиенту не показываем никакой JSON.
+    if text == "SHOW_JSON":
+        add_to_history(user_id, "user", text)
+        add_to_history(user_id, "assistant", "Запрос принят. Можем продолжить разговор.")
+        await update.message.reply_text("Запрос принят. Можем продолжить разговор.")
+        return
+
     # Сохраняем выбор продукта/тарифа и при текстовом ответе (напр. «ВИП», «Групповые занятия»),
     # чтобы кнопка «Оплатить» потом работала.
     _apply_product_and_tariff_from_text(context, text)
@@ -907,6 +1032,13 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if not user_text:
         await update.message.reply_text("Текст не распознан. Попробуй ещё раз или напиши.")
+        return
+
+    # Служебная команда SHOW_JSON — не передаём в модель, клиенту не показываем JSON.
+    if user_text == "SHOW_JSON":
+        add_to_history(user_id, "user", user_text)
+        add_to_history(user_id, "assistant", "Запрос принят. Можем продолжить разговор.")
+        await update.message.reply_text("Запрос принят. Можем продолжить разговор.")
         return
 
     _apply_product_and_tariff_from_text(context, user_text)

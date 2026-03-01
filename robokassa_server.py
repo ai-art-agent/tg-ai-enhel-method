@@ -221,8 +221,14 @@ async def robokassa_result(request: Request) -> PlainTextResponse:
 
         newly_paid = db.mark_paid_if_pending(inv_id, raw_params=parsed.get("raw") or {})
         if newly_paid:
+            order = db.get_order(inv_id)
+            if order:
+                try:
+                    db.upsert_client_from_order(order)
+                except Exception as e:
+                    logger.exception("Robokassa (VM): upsert_client_from_order failed: %s", e)
             bot_token = os.getenv("TELEGRAM_BOT_TOKEN") or ""
-            if bot_token:
+            if bot_token and order:
                 chat_id = int(order.get("chat_id") or shp.get("Shp_chat_id") or 0)
                 if chat_id:
                     text = build_access_message(str(order.get("product_code") or ""))

@@ -36,7 +36,7 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
-from robokassa_integration import PaymentsDB
+from robokassa_integration import PaymentsDB, _parse_notify_chat_id
 
 MSK = ZoneInfo("Europe/Moscow")
 
@@ -116,10 +116,9 @@ def main() -> None:
     if not chat_id_str:
         print("Ошибка: не задан TELEGRAM_GROUP_NOTIFY_CHAT_ID в .env", file=sys.stderr)
         sys.exit(1)
-    try:
-        chat_id = int(chat_id_str)
-    except ValueError:
-        print("Ошибка: TELEGRAM_GROUP_NOTIFY_CHAT_ID должен быть числом (chat_id)", file=sys.stderr)
+    chat_id = _parse_notify_chat_id(chat_id_str)
+    if chat_id is None:
+        print("Ошибка: TELEGRAM_GROUP_NOTIFY_CHAT_ID задан некорректно (ожидается число или @username).", file=sys.stderr)
         sys.exit(1)
 
     db = PaymentsDB.from_env()

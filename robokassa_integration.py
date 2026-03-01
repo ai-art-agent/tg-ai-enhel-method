@@ -144,6 +144,35 @@ class PaymentsDB:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS clients (
+                    user_id INTEGER PRIMARY KEY,
+                    chat_id INTEGER,
+                    username TEXT,
+                    first_name TEXT,
+                    last_name TEXT,
+                    contact_channel TEXT,
+                    contact_value TEXT,
+                    profile_name TEXT,
+                    form_address TEXT,
+                    age_group TEXT,
+                    focus TEXT,
+                    duration TEXT,
+                    previous_attempts TEXT,
+                    conflict TEXT,
+                    self_value_scale INTEGER,
+                    insight TEXT,
+                    readiness TEXT,
+                    product TEXT,
+                    tariff TEXT,
+                    preferred_contact_time TEXT,
+                    preferred_group_start TEXT,
+                    anket_json TEXT,
+                    updated_at INTEGER NOT NULL
+                )
+                """
+            )
         finally:
             conn.close()
 
@@ -226,6 +255,140 @@ class PaymentsDB:
             return [dict(zip(cols, row)) for row in cur.fetchall()]
         finally:
             conn.close()
+
+    def upsert_client(
+        self,
+        *,
+        user_id: int,
+        chat_id: int | None = None,
+        username: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        contact_channel: str | None = None,
+        contact_value: str | None = None,
+        profile_name: str | None = None,
+        form_address: str | None = None,
+        age_group: str | None = None,
+        focus: str | None = None,
+        duration: str | None = None,
+        previous_attempts: str | None = None,
+        conflict: str | None = None,
+        self_value_scale: int | None = None,
+        insight: str | None = None,
+        readiness: str | None = None,
+        product: str | None = None,
+        tariff: str | None = None,
+        preferred_contact_time: str | None = None,
+        preferred_group_start: str | None = None,
+        anket_json: str | None = None,
+    ) -> None:
+        """
+        Создаёт или обновляет запись клиента (анкета). По user_id.
+        Пустые значения не перезаписывают существующие (при обновлении).
+        """
+        now = int(time.time())
+        conn = self._connect()
+        try:
+            existing = conn.execute(
+                "SELECT user_id FROM clients WHERE user_id = ?", (user_id,)
+            ).fetchone()
+            if existing:
+                updates = []
+                params = []
+                for key, val in [
+                    ("chat_id", chat_id),
+                    ("username", username),
+                    ("first_name", first_name),
+                    ("last_name", last_name),
+                    ("contact_channel", contact_channel),
+                    ("contact_value", contact_value),
+                    ("profile_name", profile_name),
+                    ("form_address", form_address),
+                    ("age_group", age_group),
+                    ("focus", focus),
+                    ("duration", duration),
+                    ("previous_attempts", previous_attempts),
+                    ("conflict", conflict),
+                    ("self_value_scale", self_value_scale),
+                    ("insight", insight),
+                    ("readiness", readiness),
+                    ("product", product),
+                    ("tariff", tariff),
+                    ("preferred_contact_time", preferred_contact_time),
+                    ("preferred_group_start", preferred_group_start),
+                    ("anket_json", anket_json),
+                ]:
+                    if val is not None:
+                        updates.append(f"{key} = ?")
+                        params.append(val)
+                if updates:
+                    updates.append("updated_at = ?")
+                    params.append(now)
+                    params.append(user_id)
+                    conn.execute(
+                        "UPDATE clients SET " + ", ".join(updates) + " WHERE user_id = ?",
+                        params,
+                    )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO clients (
+                        user_id, chat_id, username, first_name, last_name,
+                        contact_channel, contact_value, profile_name, form_address, age_group,
+                        focus, duration, previous_attempts, conflict, self_value_scale,
+                        insight, readiness, product, tariff, preferred_contact_time, preferred_group_start,
+                        anket_json, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        chat_id,
+                        username or "",
+                        first_name or "",
+                        last_name or "",
+                        contact_channel or "",
+                        contact_value or "",
+                        profile_name or "",
+                        form_address or "",
+                        age_group or "",
+                        focus or "",
+                        duration or "",
+                        previous_attempts or "",
+                        conflict or "",
+                        self_value_scale,
+                        insight or "",
+                        readiness or "",
+                        product or "",
+                        tariff or "",
+                        preferred_contact_time or "",
+                        preferred_group_start or "",
+                        anket_json or "",
+                        now,
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def upsert_client_from_order(self, order: dict[str, Any]) -> None:
+        """
+        Создаёт или обновляет запись клиента по данным заказа (после оплаты).
+        Идентификация только по user_id — один клиент = одна строка.
+        """
+        user_id = order.get("user_id")
+        if user_id is None:
+            return
+        try:
+            user_id = int(user_id)
+        except (TypeError, ValueError):
+            return
+        chat_id = order.get("chat_id")
+        if chat_id is not None:
+            try:
+                chat_id = int(chat_id)
+            except (TypeError, ValueError):
+                chat_id = None
+        product = (order.get("product_code") or "").strip() or None
+        self.upsert_client(user_id=user_id, chat_id=chat_id, product=product)
 
 
 def build_payment_url(
@@ -378,7 +541,30 @@ def verify_success_url(params: dict[str, Any], *, cfg: RobokassaConfig) -> dict[
     }
 
 
-def telegram_send_message(*, bot_token: str, chat_id: int, text: str, disable_web_preview: bool = False) -> None:
+def _parse_notify_chat_id(chat_id_str: str):
+    """
+    Парсит TELEGRAM_GROUP_NOTIFY_CHAT_ID: число (личный/группа) или @username (канал).
+    Возвращает int (для chat_id) или str (для @channelusername).
+    """
+    s = (chat_id_str or "").strip()
+    if not s:
+        return None
+    # Число (в т.ч. отрицательное для группы)
+    if s.lstrip("-").isdigit():
+        return int(s)
+    # Имя канала/чата: с @ или без
+    if not s.startswith("@"):
+        s = "@" + s
+    return s
+
+
+def telegram_send_message(
+    *,
+    bot_token: str,
+    chat_id: int | str,
+    text: str,
+    disable_web_preview: bool = False,
+) -> None:
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = urlencode(
         {
@@ -460,9 +646,8 @@ def send_group_payment_notify_immediate(bot_token: str, order: dict[str, Any]) -
     chat_id_str = (_env("TELEGRAM_GROUP_NOTIFY_CHAT_ID") or "").strip()
     if not chat_id_str:
         return
-    try:
-        notify_chat_id = int(chat_id_str)
-    except ValueError:
+    notify_chat_id = _parse_notify_chat_id(chat_id_str)
+    if notify_chat_id is None:
         return
     paid_at = order.get("paid_at")
     if paid_at:
