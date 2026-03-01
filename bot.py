@@ -872,9 +872,9 @@ async def _reply_to_user(
     try:
         sent_msg = await target.reply_text("…")
 
-        # Потоковый вывод только для последней попытки (не подлежащей корректировке валидатором). Троттлинг ~0.2 с.
+        # Потоковый вывод: первая попытка и при перегенерации — оба стримятся. Троттлинг ~0.2 с.
         last_stream_edit = [0.0]
-        STREAM_THROTTLE_SEC = 0.4
+        STREAM_THROTTLE_SEC = 0.2
 
         async def stream_edit(accumulated: str) -> None:
             display, _ = _parse_step_from_reply(accumulated)
@@ -889,8 +889,8 @@ async def _reply_to_user(
                 except Exception:
                     pass
 
-        # Первая попытка — без стрима (будет валидироваться)
-        reply_raw = await _generate_reply(messages, stream=False)
+        # Первая попытка — потоково (если валидатор примет, пользователь уже видел вывод)
+        reply_raw = await _generate_reply(messages, stream=True, on_chunk=stream_edit)
 
         # Валидация и при необходимости перегенерация
         retries = 0
