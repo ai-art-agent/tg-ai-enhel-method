@@ -874,11 +874,14 @@ async def _reply_to_user(
 
         # Потоковый вывод: первая попытка и при перегенерации — оба стримятся. Троттлинг ~0.2 с.
         last_stream_edit = [0.0]
-        STREAM_THROTTLE_SEC = 0.05
+        STREAM_THROTTLE_SEC = 0.4
 
         async def stream_edit(accumulated: str) -> None:
             display, _ = _parse_step_from_reply(accumulated)
-            display = (display or "…").strip()
+            # Убираем из показа любые фрагменты вида [...]
+            display = re.sub(r"\[[^\]]*\]", "", display or "")
+            display = re.sub(r"  +", " ", display).strip()
+            display = display or "…"
             if len(display) > 4090:
                 display = display[:4090] + "..."
             now = time.monotonic()
