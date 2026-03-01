@@ -2,7 +2,7 @@
 """
 Telegram-бот «ИИ-психолог» с ответами через DeepSeek API.
 Поддержка: текст, голосовые (Whisper), потоковый вывод.
-Перед запуском: заполните .env (TELEGRAM_BOT_TOKEN, DEEPSEEK_API_KEY; для голоса — OPENAI_API_KEY).
+Перед запуском: заполните .env (TELEGRAM_BOT_TOKEN, DEEPSEEK_API_KEY; опционально DEEPSEEK_API_KEY_VALIDATOR — отдельный ключ для валидатора; для голоса — OPENAI_API_KEY).
 Подробно: INSTRUCTIONS.md.
 """
 
@@ -247,6 +247,7 @@ LIST_MARKER = "➖"
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_API_KEY_VALIDATOR = os.getenv("DEEPSEEK_API_KEY_VALIDATOR")  # опционально: отдельный ключ для валидатора
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not TELEGRAM_TOKEN:
@@ -254,11 +255,22 @@ if not TELEGRAM_TOKEN:
 if not DEEPSEEK_API_KEY:
     raise ValueError("В .env не указан DEEPSEEK_API_KEY. См. INSTRUCTIONS.md, Этап 2.")
 
-# DeepSeek API (совместим с OpenAI SDK) — асинхронный клиент для потокового вывода
+# DeepSeek API (совместим с OpenAI SDK) — асинхронный клиент для ответов психолога и потокового вывода
 client = AsyncOpenAI(
     api_key=DEEPSEEK_API_KEY,
     base_url="https://api.deepseek.com",
 )
+# Отдельный клиент для валидатора (если задан DEEPSEEK_API_KEY_VALIDATOR) — разводит лимиты и квоту
+validator_client = (
+    AsyncOpenAI(
+        api_key=DEEPSEEK_API_KEY_VALIDATOR,
+        base_url="https://api.deepseek.com",
+    )
+    if DEEPSEEK_API_KEY_VALIDATOR
+    else None
+)
+if validator_client:
+    logging.info("Валидатор использует отдельный API-ключ (DEEPSEEK_API_KEY_VALIDATOR).")
 # OpenAI — только для Whisper (голосовые). Если ключа нет, голос отключён.
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 user_history = defaultdict(list)
@@ -390,12 +402,14 @@ def get_history_messages(user_id: int) -> list[dict]:
 async def _validate_reply(reply_raw: str) -> tuple[bool, list[str], list[str], str]:
     """
     Проверяет ответ основной модели через промпт-валидатор.
+    Использует validator_client (отдельный ключ), если задан DEEPSEEK_API_KEY_VALIDATOR, иначе client.
     Возвращает (valid, errors, recommendations, raw_response). При сбое валидации считаем ответ валидным.
     """
     if not VALIDATOR_ENABLED or not reply_raw or not reply_raw.strip():
         return True, [], [], ""
+    api_client = validator_client if validator_client else client
     try:
-        response = await client.chat.completions.create(
+        response = await api_client.chat.completions.create(
             model=DEEPSEEK_MODEL,
             messages=[
                 {"role": "system", "content": VALIDATOR_PROMPT},
