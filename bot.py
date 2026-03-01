@@ -684,7 +684,7 @@ async def send_payment_link(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
 
 async def _generate_reply(msgs: list[dict], stream: bool = False, on_chunk: Optional[Callable[[str], None]] = None) -> str:
-    """Генерация ответа модели. При stream=True и on_chunk вызывается on_chunk(accumulated) для каждого фрагмента."""
+    """Генерация ответа модели. При stream=True и on_chunk вызывается on_chunk(accumulated) для каждого фрагмента (on_chunk может быть async)."""
     if stream:
         stream_obj = await client.chat.completions.create(
             model=DEEPSEEK_MODEL,
@@ -699,7 +699,9 @@ async def _generate_reply(msgs: list[dict], stream: bool = False, on_chunk: Opti
                 accumulated += chunk.choices[0].delta.content
                 if on_chunk:
                     try:
-                        on_chunk(accumulated)
+                        result = on_chunk(accumulated)
+                        if asyncio.iscoroutine(result):
+                            await result
                     except Exception:
                         pass
         return truncate_response(accumulated.strip()) or "Не удалось сформировать ответ."
@@ -869,9 +871,26 @@ async def _reply_to_user(
 
     try:
         sent_msg = await target.reply_text("…")
-        reply_raw = await _generate_reply(messages, stream=STREAM_RESPONSE)
 
-        # Валидация и при необходимости перегенерация (пользователь не видит процесс)
+        # Потоковый вывод: обновляем сообщение по мере появления текста (троттлинг ~0.4 с)
+        last_stream_edit = [0.0]
+
+        async def stream_edit(accumulated: str) -> None:
+            display, _ = _parse_step_from_reply(accumulated)
+            display = (display or "…").strip()
+            if len(display) > 4090:
+                display = display[:4090] + "..."
+            now = time.monotonic()
+            if now - last_stream_edit[0] >= 0.4 or not last_stream_edit[0]:
+                try:
+                    await sent_msg.edit_text(display or "…")
+                    last_stream_edit[0] = now
+                except Exception:
+                    pass
+
+        reply_raw = await _generate_reply(messages, stream=STREAM_RESPONSE, on_chunk=stream_edit)
+
+        # Валидация и при необходимости перегенерация
         retries = 0
         while VALIDATOR_ENABLED and retries <= MAX_VALIDATION_RETRIES:
             valid, errors, recommendations, _ = await _validate_reply(reply_raw)
@@ -902,7 +921,13 @@ async def _reply_to_user(
                 {"role": "assistant", "content": reply_raw},
                 {"role": "user", "content": " ".join(retry_parts)},
             ]
-            reply_raw = await _generate_reply(retry_messages, stream=False)
+            # Вторую (и последнюю) попытку тоже показываем потоково
+            try:
+                await sent_msg.edit_text("…")
+            except Exception:
+                pass
+            last_stream_edit[0] = 0.0
+            reply_raw = await _generate_reply(retry_messages, stream=True, on_chunk=stream_edit)
             retries += 1
             messages = retry_messages
 
