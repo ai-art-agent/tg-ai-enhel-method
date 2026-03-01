@@ -8,7 +8,6 @@ Telegram-бот «ИИ-психолог» с ответами через DeepSee
 
 import os
 import re
-import html
 import json
 import logging
 import tempfile
@@ -58,14 +57,33 @@ except (TypeError, ValueError):
 PLACEHOLDER_MAX_RESPONSE = "{{MAX_RESPONSE_CHARS}}"
 
 
+def _format_price_display(value: str) -> str:
+    """Форматирует сумму для отображения в промпте: 24990 -> «24 990»."""
+    s = str(value).strip().replace(",", ".").replace(" ", "")
+    try:
+        n = int(float(s))
+        return f"{n:,}".replace(",", " ")
+    except (ValueError, TypeError):
+        return value
+
+
 def _load_system_prompt() -> str:
-    """Загружает системный промпт из файла system_prompt.txt. Подставляет {{MAX_RESPONSE_CHARS}}."""
+    """Загружает системный промпт из файла system_prompt.txt. Подставляет {{MAX_RESPONSE_CHARS}} и цены из .env."""
     try:
         with open(_PROMPT_PATH, encoding="utf-8") as f:
             content = f.read().strip()
         if not content:
             raise ValueError("Файл system_prompt.txt пуст.")
         content = content.replace(PLACEHOLDER_MAX_RESPONSE, str(MAX_RESPONSE_CHARS))
+        # Цены только из .env (для групповых: если нет STANDARD/VIP, берём PRICE_GROUP_RUB для обратной совместимости)
+        price_std = os.getenv("PRICE_GROUP_STANDARD_RUB") or os.getenv("PRICE_GROUP_RUB") or "24990"
+        price_vip = os.getenv("PRICE_GROUP_VIP_RUB") or os.getenv("PRICE_GROUP_RUB") or "45990"
+        price_webinar = os.getenv("PRICE_WEBINAR_RUB") or "2990"
+        price_pro = os.getenv("PRICE_PRO_RUB") or "990"
+        content = content.replace("{{PRICE_GROUP_STANDARD}}", _format_price_display(price_std))
+        content = content.replace("{{PRICE_GROUP_VIP}}", _format_price_display(price_vip))
+        content = content.replace("{{PRICE_WEBINAR}}", _format_price_display(price_webinar))
+        content = content.replace("{{PRICE_PRO}}", _format_price_display(price_pro))
         return content
     except FileNotFoundError:
         raise ValueError(
@@ -203,10 +221,9 @@ def _amount_from_env(name: str, default: str) -> str:
         return _to_amount_str(default)
 
 
-# Цены (можно переопределить переменными окружения)
-#PRICE_GROUP_RUB = _amount_from_env("PRICE_GROUP_RUB", "29990") группа исключена
-PRICE_GROUP_STANDARD_RUB = _amount_from_env("PRICE_GROUP_STANDARD_RUB", "24990")
-PRICE_GROUP_VIP_RUB = _amount_from_env("PRICE_GROUP_VIP_RUB", "45990")
+# Цены только из .env. Для групповых: если нет PRICE_GROUP_STANDARD_RUB/PRICE_GROUP_VIP_RUB, берётся PRICE_GROUP_RUB (обратная совместимость со старым .env на ВМ).
+PRICE_GROUP_STANDARD_RUB = _amount_from_env("PRICE_GROUP_STANDARD_RUB", os.getenv("PRICE_GROUP_RUB", "24990"))
+PRICE_GROUP_VIP_RUB = _amount_from_env("PRICE_GROUP_VIP_RUB", os.getenv("PRICE_GROUP_RUB", "45990"))
 PRICE_WEBINAR_RUB = _amount_from_env("PRICE_WEBINAR_RUB", "2990")
 PRICE_PRO_RUB = _amount_from_env("PRICE_PRO_RUB", "990")
 
@@ -268,26 +285,17 @@ user_history = defaultdict(list)
 def _format_reply_for_telegram(text: str) -> tuple[str, Optional[str]]:
     """
     Приводит ответ модели к виду для Telegram:
-    - «**текст**» → жирный через HTML <b>, остальное экранируется для HTML.
+    - «**текст**» → оставляем как обычный текст (без жирного), чтобы не ломать переносы строк.
     - Строки списков «* пункт» / «- пункт» → «➖ пункт».
-    Возвращает (итоговый текст, parse_mode или None). parse_mode="HTML" при наличии тегов.
+    parse_mode не используем, чтобы сохранить логику переносов.
     """
     if not text:
         return text, None
     # Списки: в начале строки * или - с пробелом → маркер ➖
     text = re.sub(r"^(\s*)(\*|-)\s+", rf"\1{LIST_MARKER} ", text, flags=re.MULTILINE)
-    # Жирный: **...** → <b>...</b> с экранированием содержимого и остального текста
-    parts = re.split(r"\*\*(.+?)\*\*", text)
-    result = []
-    for i, part in enumerate(parts):
-        if i % 2 == 0:
-            result.append(html.escape(part))
-        else:
-            result.append("<b>" + html.escape(part) + "</b>")
-    out = "".join(result)
-    # Если не было ни одного **, split вернул один элемент и тегов <b> нет — parse_mode не нужен
-    use_html = "<b>" in out
-    return (out, "HTML" if use_html else None)
+    # Убираем жирный **...** — оставляем только содержимое (без тегов и без parse_mode)
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    return (text, None)
 
 
 def _get_reply_target(update: Update):

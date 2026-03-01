@@ -366,13 +366,16 @@ ROBOKASSA_PASSWORD2=пароль_2_для_ResultURL
 ROBOKASSA_IS_TEST=1
 PAYMENTS_DB_PATH=payments.sqlite3
 TELEGRAM_BOT_USERNAME=имя_вашего_бота_без_собаки
-PRICE_GROUP_RUB=29990
-PRICE_WEBINAR_RUB=3000
+PRICE_GROUP_STANDARD_RUB=24990
+PRICE_GROUP_VIP_RUB=45990
+PRICE_WEBINAR_RUB=2990
 PRICE_PRO_RUB=990
 WEBINAR_ACCESS_URL=https://...
 GROUP_COURSE_ACCESS_URL=https://...
 PRO_BOT_URL=https://t.me/...
 ```
+
+Цены групповых занятий задаются двумя переменными: `PRICE_GROUP_STANDARD_RUB` (тариф «Стандарт») и `PRICE_GROUP_VIP_RUB` (тариф «VIP»). Бот и системный промпт берут все суммы оплаты только из `.env` при запуске. В `.env` можно указывать цену целым числом или с точкой (например `2990` или `2990.00`) — код нормализует значение для Робокассы, оба формата допустимы. Если на ВМ в `.env` осталась только старая переменная `PRICE_GROUP_RUB`, она используется для обоих тарифов (Стандарт и VIP), пока не заданы отдельные.
 
 Переменная `TELEGRAM_BOT_USERNAME` нужна для страниц успеха/ошибки оплаты (robokassa-server): на них показывается кнопка «Открыть чат», ведущая в ваш бот; на мобильных возможен автоматический переход в приложение Telegram.
 
