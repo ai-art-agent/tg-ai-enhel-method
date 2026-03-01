@@ -2,7 +2,7 @@
 """
 Telegram-бот «ИИ-психолог» с ответами через DeepSeek API.
 Поддержка: текст, голосовые (Whisper), потоковый вывод.
-Перед запуском: заполните .env (TELEGRAM_BOT_TOKEN, DEEPSEEK_API_KEY; опционально DEEPSEEK_API_KEY_VALIDATOR — отдельный ключ для валидатора; для голоса — OPENAI_API_KEY).
+Перед запуском: заполните .env (TELEGRAM_BOT_TOKEN, DEEPSEEK_API_KEY; для голоса — OPENAI_API_KEY).
 Подробно: INSTRUCTIONS.md.
 """
 
@@ -97,8 +97,9 @@ def _load_validator_prompt() -> str:
 
 
 VALIDATOR_PROMPT = _load_validator_prompt()
-VALIDATOR_ENABLED = bool(VALIDATOR_PROMPT)
-# 0 = одна проверка, без перегенерации. 1 = одна перегенерация при отклонении (три облака: ответ → вердикт → новый ответ).
+# Валидатор отключён: ответы показываются без проверки и перегенерации. Файл validator_prompt.txt остаётся в проекте.
+VALIDATOR_ENABLED = False
+# 0 = одна проверка, без перегенерации. 1 = одна перегенерация при отклонении (не используется при VALIDATOR_ENABLED=False).
 MAX_VALIDATION_RETRIES = 1
 
 
@@ -247,7 +248,6 @@ LIST_MARKER = "➖"
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-DEEPSEEK_API_KEY_VALIDATOR = os.getenv("DEEPSEEK_API_KEY_VALIDATOR")  # опционально: отдельный ключ для валидатора
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not TELEGRAM_TOKEN:
@@ -260,17 +260,6 @@ client = AsyncOpenAI(
     api_key=DEEPSEEK_API_KEY,
     base_url="https://api.deepseek.com",
 )
-# Отдельный клиент для валидатора (если задан DEEPSEEK_API_KEY_VALIDATOR) — разводит лимиты и квоту
-validator_client = (
-    AsyncOpenAI(
-        api_key=DEEPSEEK_API_KEY_VALIDATOR,
-        base_url="https://api.deepseek.com",
-    )
-    if DEEPSEEK_API_KEY_VALIDATOR
-    else None
-)
-if validator_client:
-    logging.info("Валидатор использует отдельный API-ключ (DEEPSEEK_API_KEY_VALIDATOR).")
 # OpenAI — только для Whisper (голосовые). Если ключа нет, голос отключён.
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 user_history = defaultdict(list)
@@ -397,55 +386,6 @@ def get_history_messages(user_id: int) -> list[dict]:
     for item in user_history[user_id]:
         messages.append({"role": item["role"], "content": item["content"]})
     return messages
-
-
-async def _validate_reply(reply_raw: str) -> tuple[bool, list[str], list[str], str]:
-    """
-    Проверяет ответ основной модели через промпт-валидатор.
-    Использует validator_client (отдельный ключ), если задан DEEPSEEK_API_KEY_VALIDATOR, иначе client.
-    Возвращает (valid, errors, recommendations, raw_response). При сбое валидации считаем ответ валидным.
-    """
-    if not VALIDATOR_ENABLED or not reply_raw or not reply_raw.strip():
-        return True, [], [], ""
-    api_client = validator_client if validator_client else client
-    try:
-        response = await api_client.chat.completions.create(
-            model=DEEPSEEK_MODEL,
-            messages=[
-                {"role": "system", "content": VALIDATOR_PROMPT},
-                {"role": "user", "content": f"ANSWER:\n{reply_raw}"},
-            ],
-            max_tokens=500,
-            temperature=0,
-        )
-        raw_text = (response.choices[0].message.content or "").strip()
-        text = raw_text
-        # Убрать обёртку ```json ... ```
-        if "```" in text:
-            for part in re.split(r"```\w*", text):
-                part = part.strip()
-                if part.startswith("{"):
-                    text = part
-                    break
-        data = json.loads(text)
-        valid = data.get("valid", True)
-        errors = data.get("errors") or []
-        if isinstance(errors, list):
-            errors = [str(e) for e in errors]
-        else:
-            errors = [str(errors)] if errors else []
-        recommendations = data.get("recommendations") or []
-        if isinstance(recommendations, list):
-            recommendations = [str(r) for r in recommendations]
-        else:
-            recommendations = [str(recommendations)] if recommendations else []
-        return bool(valid), errors, recommendations, raw_text
-    except (json.JSONDecodeError, KeyError, TypeError) as e:
-        logging.warning("Валидатор вернул невалидный JSON: %s", e)
-        return True, [], [], ""
-    except Exception as e:
-        logging.warning("Ошибка валидатора: %s", e)
-        return True, [], [], ""
 
 
 def add_to_history(user_id: int, role: str, content: str) -> None:
@@ -740,9 +680,7 @@ async def get_bot_reply(
 ):
     """
     Один шаг диалога без Telegram. Возвращает (reply_clean, buttons, validator_outputs, timings, rejected_reply_clean).
-    validator_outputs: список (raw_validator, reply_raw, validator_ms).
-    timings: {"psychologist_ms": int}.
-    rejected_reply_clean: если была перегенерация — текст первого (отклонённого) ответа для отображения первым облаком; иначе None.
+    Валидатор отключён: validator_outputs всегда [], rejected_reply_clean всегда None.
     stream_callback(text_so_far): при задании ответ психолога стримится по фрагментам.
     """
     add_to_history(user_id, "user", user_text)
@@ -753,64 +691,6 @@ async def get_bot_reply(
         messages, stream=use_stream, on_chunk=stream_callback if use_stream else None
     )
     psychologist_ms = int((time.monotonic() - t0_psych) * 1000)
-
-    validator_outputs = []
-    rejected_reply_clean = None
-    retries = 0
-    while VALIDATOR_ENABLED and retries <= MAX_VALIDATION_RETRIES:
-        # Валидатор вызываем только для первого ответа; после перегенерации второй ответ не проверяем (лимит перегенераций всё равно исчерпан).
-        if retries == 0:
-            t0_val = time.monotonic()
-            valid, errors, recommendations, raw_validator = await _validate_reply(reply_raw)
-            validator_ms = int((time.monotonic() - t0_val) * 1000)
-            if log_validator_full and raw_validator:
-                logging.info("Валидатор (полный ответ): %s", raw_validator)
-            if raw_validator:
-                validator_outputs.append((raw_validator, reply_raw, validator_ms))
-            if validator_callback and raw_validator:
-                try:
-                    validator_callback(raw_validator)
-                except Exception:
-                    pass
-            if valid:
-                break
-        else:
-            valid = True
-            break
-        if retries >= MAX_VALIDATION_RETRIES:
-            logging.info(
-                "Валидатор: исчерпан лимит перегенераций (%d), оставляем последний ответ. Ошибки: %s",
-                MAX_VALIDATION_RETRIES,
-                "; ".join(errors) if errors else "—",
-            )
-            break
-        # Сохраняем отклонённый ответ для отображения первым облаком (ответ → вердикт → новый ответ).
-        rej_clean, rej_step = _parse_step_from_reply(reply_raw)
-        rej_kb = _keyboard_for_step(rej_step, context) if rej_step else None
-        if rej_kb is None:
-            rej_clean, _ = _parse_custom_buttons(rej_clean)
-        rejected_reply_clean = (rej_clean or "").strip()
-        logging.info(
-            "Валидатор: ответ отклонён — %s. Перегенерация %d/%d.",
-            "; ".join(errors) if errors else "—",
-            retries + 1,
-            MAX_VALIDATION_RETRIES,
-        )
-        retry_parts = ["Твой ответ отклонён."]
-        if errors:
-            retry_parts.append("Нарушения: " + "; ".join(errors) + ".")
-        if recommendations:
-            retry_parts.append("Рекомендации: " + "; ".join(recommendations) + ".")
-        retry_parts.append("Ответь заново, исправив перечисленное. Важно: не извиняйся перед пользователем, не пиши «прошу прощения за ошибку», «извините» и т.п. — пользователь не видит валидатор. Просто дай исправленный ответ.")
-        retry_messages = messages + [
-            {"role": "assistant", "content": reply_raw},
-            {"role": "user", "content": " ".join(retry_parts)},
-        ]
-        t0_retry = time.monotonic()
-        reply_raw = await _generate_reply(retry_messages, stream=False)
-        psychologist_ms += int((time.monotonic() - t0_retry) * 1000)
-        retries += 1
-        messages = retry_messages
 
     reply_clean, step_id = _parse_step_from_reply(reply_raw)
     keyboard = _keyboard_for_step(step_id, context) if step_id else None
@@ -823,7 +703,7 @@ async def get_bot_reply(
             for btn in row:
                 buttons.append((getattr(btn, "text", ""), getattr(btn, "callback_data", "")))
     timings = {"psychologist_ms": psychologist_ms}
-    return (reply_clean or "").strip(), buttons, validator_outputs, timings, rejected_reply_clean
+    return (reply_clean or "").strip(), buttons, [], timings, None
 
 
 def _is_terminal_action(simulator_message: str) -> bool:
@@ -873,7 +753,7 @@ async def _reply_to_user(
     user_id: int,
     user_text: str,
 ) -> None:
-    """Общая логика: добавить в историю, вызвать DeepSeek, при необходимости перегенерировать по валидатору, отправить ответ."""
+    """Общая логика: добавить в историю, вызвать DeepSeek, отправить ответ (без валидатора)."""
     add_to_history(user_id, "user", user_text)
     messages = get_history_messages(user_id)
     target = _get_reply_target(update)
@@ -886,9 +766,9 @@ async def _reply_to_user(
     try:
         sent_msg = await target.reply_text("…")
 
-        # Потоковый вывод: первая попытка и при перегенерации — оба стримятся. Троттлинг ~0.2 с.
+        # Потоковый вывод. Троттлинг ~0.2 с.
         last_stream_edit = [0.0]
-        STREAM_THROTTLE_SEC = 0.4
+        STREAM_THROTTLE_SEC = 0.2
 
         async def stream_edit(accumulated: str) -> None:
             display, _ = _parse_step_from_reply(accumulated)
@@ -906,49 +786,7 @@ async def _reply_to_user(
                 except Exception:
                     pass
 
-        # Первая попытка — потоково (если валидатор примет, пользователь уже видел вывод)
         reply_raw = await _generate_reply(messages, stream=True, on_chunk=stream_edit)
-
-        # Валидация и при необходимости перегенерация
-        retries = 0
-        while VALIDATOR_ENABLED and retries <= MAX_VALIDATION_RETRIES:
-            valid, errors, recommendations, _ = await _validate_reply(reply_raw)
-            if valid:
-                if retries > 0:
-                    logging.info("Валидатор: ответ принят после перегенерации (попытка %d).", retries + 1)
-                break
-            if retries >= MAX_VALIDATION_RETRIES:
-                logging.info(
-                    "Валидатор: исчерпан лимит перегенераций (%d), оставляем последний ответ. Ошибки: %s",
-                    MAX_VALIDATION_RETRIES,
-                    "; ".join(errors) if errors else "—",
-                )
-                break
-            logging.info(
-                "Валидатор: ответ отклонён — %s. Перегенерация %d/%d.",
-                "; ".join(errors) if errors else "—",
-                retries + 1,
-                MAX_VALIDATION_RETRIES,
-            )
-            retry_parts = ["Твой ответ отклонён."]
-            if errors:
-                retry_parts.append("Нарушения: " + "; ".join(errors) + ".")
-            if recommendations:
-                retry_parts.append("Рекомендации: " + "; ".join(recommendations) + ".")
-            retry_parts.append("Ответь заново, исправив перечисленное.")
-            retry_messages = messages + [
-                {"role": "assistant", "content": reply_raw},
-                {"role": "user", "content": " ".join(retry_parts)},
-            ]
-            # В последовательный (потоковый) вывод передаём только последнюю попытку — она не валидируется
-            try:
-                await sent_msg.edit_text("…")
-            except Exception:
-                pass
-            last_stream_edit[0] = 0.0
-            reply_raw = await _generate_reply(retry_messages, stream=True, on_chunk=stream_edit)
-            retries += 1
-            messages = retry_messages
 
         reply_clean, step_id = _parse_step_from_reply(reply_raw)
         keyboard = _keyboard_for_step(step_id, context) if step_id else None
