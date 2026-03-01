@@ -233,6 +233,25 @@ def main():
                 pass
     root.bind("<Control-c>", _copy_selection)
 
+    def _format_validator_display(raw: str) -> str:
+        """Если в строке есть валидный JSON — форматирует его с отступами для читаемого отображения."""
+        if not raw or not raw.strip():
+            return raw or ""
+        s = raw.strip()
+        if "{" in s and "}" in s:
+            try:
+                start, end = s.index("{"), s.rindex("}") + 1
+                obj = json.loads(s[start:end])
+                pretty = json.dumps(obj, ensure_ascii=False, indent=2)
+                prefix = s[:start].strip()
+                suffix = s[end:].strip()
+                if prefix or suffix:
+                    return (prefix + "\n" if prefix else "") + pretty + ("\n" + suffix if suffix else "")
+                return pretty
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return raw
+
     def add_bubble(side: str, text: str, is_technical: bool = False, simulator_button: str = None, buttons: list = None, timing_sec: float = None, streaming_placeholder: bool = False):
         """timing_sec: показывать в облачке «Время: X.XX с». streaming_placeholder: создать левое облачко с «…» и вернуть ref для обновления."""
         outer = ttk.Frame(content)
@@ -401,7 +420,7 @@ def main():
                 streaming_ref[0] = None
                 raw_val, _, val_ms = validator_outputs[0]
                 timing_sec = (val_ms / 1000.0) if isinstance(val_ms, (int, float)) else None
-                add_bubble("left", "Валидатор: " + (raw_val or ""), is_technical=True, timing_sec=timing_sec)
+                add_bubble("left", "Валидатор:\n" + _format_validator_display(raw_val or ""), is_technical=True, timing_sec=timing_sec)
                 add_bubble("left", reply, buttons=buttons, timing_sec=(timings.get("psychologist_ms") or 0) / 1000.0 if timings else None)
             elif ref:
                 try:
@@ -533,7 +552,7 @@ def main():
                 raw_validator, rejected_text = payload[0], payload[1]
                 if len(payload) >= 3:
                     validator_ms = payload[2]
-            display = "Валидатор (проверка ответа психолога выше): " + raw_validator
+            display = "Валидатор (проверка ответа психолога выше):\n" + _format_validator_display(raw_validator or "")
             if rejected_text and (rejected_text or "").strip():
                 try:
                     s = (raw_validator or "").strip()
@@ -541,7 +560,7 @@ def main():
                         start, end = s.index("{"), s.rindex("}") + 1
                         data = json.loads(s[start:end])
                         if not data.get("valid", True):
-                            display = "Текст, отклонённый валидатором:\n\n" + (rejected_text or "").strip() + "\n\n---\nВалидатор: " + raw_validator
+                            display = "Текст, отклонённый валидатором:\n\n" + (rejected_text or "").strip() + "\n\n---\nВалидатор:\n" + _format_validator_display(raw_validator or "")
                 except Exception:
                     pass
             timing_sec = (validator_ms / 1000.0) if isinstance(validator_ms, (int, float)) else None
@@ -556,7 +575,7 @@ def main():
                 add_bubble("left", rejected_reply)
                 raw_val, _, val_ms = validator_texts[0]
                 v_sec = (val_ms / 1000.0) if isinstance(val_ms, (int, float)) else None
-                add_bubble("left", "Валидатор: " + (raw_val or ""), is_technical=True, timing_sec=v_sec)
+                add_bubble("left", "Валидатор:\n" + _format_validator_display(raw_val or ""), is_technical=True, timing_sec=v_sec)
                 add_bubble("left", reply, buttons=buttons, timing_sec=timing_sec)
             else:
                 add_bubble("left", reply, buttons=buttons, timing_sec=timing_sec)
