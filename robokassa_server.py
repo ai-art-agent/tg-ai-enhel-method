@@ -47,6 +47,7 @@ from robokassa_integration import (
     telegram_send_message,
     verify_result_url,
     verify_success_url,
+    send_group_payment_notify_immediate,
 )
 
 logger = logging.getLogger("robokassa_server")
@@ -234,6 +235,10 @@ async def robokassa_result(request: Request) -> PlainTextResponse:
                         )
                     except Exception as e:
                         logger.exception("Robokassa (VM): Telegram sendMessage failed: %s", e)
+                try:
+                    send_group_payment_notify_immediate(bot_token, db.get_order(inv_id))
+                except Exception as e:
+                    logger.exception("Robokassa (VM): group digest immediate notify failed: %s", e)
 
         return PlainTextResponse(f"OK{inv_id}")
     except Exception as e:

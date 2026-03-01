@@ -366,6 +366,12 @@ ROBOKASSA_PASSWORD2=пароль_2_для_ResultURL
 ROBOKASSA_IS_TEST=1
 PAYMENTS_DB_PATH=payments.sqlite3
 TELEGRAM_BOT_USERNAME=имя_вашего_бота_без_собаки
+TELEGRAM_GROUP_NOTIFY_CHAT_ID=123456789
+GROUP_DIGEST_MODE=scheduled
+GROUP_DIGEST_TIME_1=12:00
+GROUP_DIGEST_TIME_2=16:00
+GROUP_DIGEST_TIME_3=
+GROUP_DIGEST_SINCE_HOURS=12
 PRICE_GROUP_STANDARD_RUB=24990
 PRICE_GROUP_VIP_RUB=45990
 PRICE_WEBINAR_RUB=2990
@@ -374,6 +380,8 @@ WEBINAR_ACCESS_URL=https://...
 GROUP_COURSE_ACCESS_URL=https://...
 PRO_BOT_URL=https://t.me/...
 ```
+
+Переменная `TELEGRAM_GROUP_NOTIFY_CHAT_ID` — chat_id (число) аккаунта или группы в Telegram, куда отправляются уведомления об оплатах групповых занятий. Режим задаётся **`GROUP_DIGEST_MODE`**: **`immediate`** — одно сообщение сразу при каждой оплате (скрипт по cron не нужен); **`scheduled`** — дайджест по расписанию. В режиме `scheduled` укажите время по Москве в **`GROUP_DIGEST_TIME_1`**, **`GROUP_DIGEST_TIME_2`**, **`GROUP_DIGEST_TIME_3`** (формат HH:MM); пустое значение = слот не используется (от 1 до 3 отправок в сутки). Опционально: **`GROUP_DIGEST_SINCE_HOURS`** — за сколько часов выбирать оплаты (по умолчанию 12). Скрипт: `send_group_digest.py`; пример cron: `deploy/cron_group_digest.example`.
 
 Цены групповых занятий задаются двумя переменными: `PRICE_GROUP_STANDARD_RUB` (тариф «Стандарт») и `PRICE_GROUP_VIP_RUB` (тариф «VIP»). Бот и системный промпт берут все суммы оплаты только из `.env` при запуске. В `.env` можно указывать цену целым числом или с точкой (например `2990` или `2990.00`) — код нормализует значение для Робокассы, оба формата допустимы. Если на ВМ в `.env` осталась только старая переменная `PRICE_GROUP_RUB`, она используется для обоих тарифов (Стандарт и VIP), пока не заданы отдельные.
 

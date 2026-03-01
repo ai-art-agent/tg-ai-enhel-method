@@ -315,6 +315,8 @@ OPENAI_API_KEY=ваш_ключ_OpenAI
 
 Сохраните: `Ctrl+O`, Enter, выход: `Ctrl+X`.
 
+**Дайджест групповых занятий:** если нужны уведомления об оплатах групповых в отдельный чат, добавьте в `.env`: `TELEGRAM_GROUP_NOTIFY_CHAT_ID=chat_id`, `GROUP_DIGEST_MODE=immediate` или `scheduled`. В режиме `scheduled` задайте время по Москве: `GROUP_DIGEST_TIME_1=12:00`, `GROUP_DIGEST_TIME_2=16:00`, `GROUP_DIGEST_TIME_3=` (пусто = слот не используется; от 1 до 3 раз в сутки). Опционально: `GROUP_DIGEST_SINCE_HOURS=12`. Для отправки по расписанию настройте cron по примеру `deploy/cron_group_digest.example` (запуск каждые 5–10 минут; скрипт отправит дайджест только в заданные минуты).
+
 Проверьте, что файл на месте и не попал в вывод команд (не показывайте его посторонним):
 
 ```bash

@@ -1,0 +1,8 @@
+# Пример cron для дайджеста по групповым занятиям (режим GROUP_DIGEST_MODE=scheduled).
+# В .env задайте GROUP_DIGEST_TIME_1, GROUP_DIGEST_TIME_2, GROUP_DIGEST_TIME_3 (МСК, HH:MM; пустые = слот не используется).
+# Скрипт при запуске проверяет текущее время (МСК) и отправляет дайджест только в заданные минуты.
+#
+# Запуск каждые 10 минут — отправка произойдёт только когда время совпадёт с одним из GROUP_DIGEST_TIME_*.
+# Подставьте свой путь и venv.
+#
+# */10 * * * * cd /home/enhel-method/tg-ai-enhel-method && /home/enhel-method/tg-ai-enhel-method/venv/bin/python send_group_digest.py

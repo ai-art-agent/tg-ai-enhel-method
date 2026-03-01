@@ -27,6 +27,7 @@ from robokassa_integration import (  # noqa: E402
     telegram_send_message,
     verify_result_url,
     verify_success_url,
+    send_group_payment_notify_immediate,
 )
 
 logging.basicConfig(
@@ -104,6 +105,10 @@ def handler_result(event, context):
                         )
                     except Exception as e:
                         logging.exception("Telegram sendMessage failed: %s", e)
+                try:
+                    send_group_payment_notify_immediate(bot_token, db.get_order(inv_id))
+                except Exception as e:
+                    logging.exception("Group digest immediate notify failed: %s", e)
 
         return {"statusCode": 200, "body": f"OK{inv_id}"}
     except Exception as e:

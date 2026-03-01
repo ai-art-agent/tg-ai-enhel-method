@@ -18,6 +18,8 @@ import sqlite3
 import secrets
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -199,6 +201,29 @@ class PaymentsDB:
                 (now, json.dumps(raw_params, ensure_ascii=False), inv_id),
             )
             return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    def get_group_orders_paid_since(self, since_ts: int) -> list[dict[str, Any]]:
+        """
+        Возвращает заказы по групповым занятиям (group_standard, group_vip) с status='paid'
+        и paid_at >= since_ts (unix timestamp UTC). Сортировка по paid_at по возрастанию.
+        """
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT inv_id, user_id, chat_id, product_code, amount, description, paid_at
+                FROM orders
+                WHERE product_code IN ('group_standard', 'group_vip')
+                  AND status = 'paid'
+                  AND paid_at >= ?
+                ORDER BY paid_at ASC
+                """,
+                (since_ts,),
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
         finally:
             conn.close()
 
@@ -417,3 +442,44 @@ def build_access_message(product_code: str) -> str:
 
     return "Оплата прошла успешно. Благодарю за доверие!"
 
+
+MSK = ZoneInfo("Europe/Moscow")
+
+
+def send_group_payment_notify_immediate(bot_token: str, order: dict[str, Any]) -> None:
+    """
+    Если GROUP_DIGEST_MODE=immediate и задан TELEGRAM_GROUP_NOTIFY_CHAT_ID,
+    отправляет в чат дайджеста одну строку о только что оплаченном групповом заказе.
+    Иначе ничего не делает.
+    """
+    if (order.get("product_code") or "") not in ("group_standard", "group_vip"):
+        return
+    mode = (_env("GROUP_DIGEST_MODE") or "").strip().lower()
+    if mode != "immediate":
+        return
+    chat_id_str = (_env("TELEGRAM_GROUP_NOTIFY_CHAT_ID") or "").strip()
+    if not chat_id_str:
+        return
+    try:
+        notify_chat_id = int(chat_id_str)
+    except ValueError:
+        return
+    paid_at = order.get("paid_at")
+    if paid_at:
+        dt = datetime.fromtimestamp(paid_at, tz=timezone.utc).astimezone(MSK)
+        time_str = dt.strftime("%d.%m.%Y %H:%M")
+    else:
+        time_str = "—"
+    user_id = order.get("user_id") or "—"
+    chat_id = order.get("chat_id") or "—"
+    product = (order.get("product_code") or "").replace("group_", "").capitalize()
+    if product == "Standard":
+        product = "Стандарт"
+    elif product == "Vip":
+        product = "VIP"
+    amount = order.get("amount") or "—"
+    text = f"Групповые (сразу): {time_str} МСК | user_id {user_id} | chat_id {chat_id} | {product} | {amount} ₽"
+    try:
+        telegram_send_message(bot_token=bot_token, chat_id=notify_chat_id, text=text)
+    except Exception:
+        logging.getLogger(__name__).exception("Групповой дайджест (immediate): не удалось отправить в Telegram")
