@@ -186,16 +186,14 @@ def main():
                 if sel and sel.strip():
                     root.clipboard_clear()
                     root.clipboard_append(sel.strip())
+                    root.update()
             except tk.TclError:
                 pass
             return "break"
         txt.bind("<Control-c>", _do_copy)
         txt.bind("<Control-C>", _do_copy)
-        def _on_key(e):
-            if (e.state & 0x4) and e.keysym.lower() == 'c':
-                _do_copy()
-            return "break"
-        txt.bind("<Key>", _on_key)
+        txt.bind("<Control-KeyPress-c>", _do_copy)
+        txt.bind("<Control-KeyPress-C>", _do_copy)
 
         def _on_right_click(event):
             try:
@@ -215,6 +213,7 @@ def main():
                 if sel and sel.strip():
                     root.clipboard_clear()
                     root.clipboard_append(sel.strip())
+                    root.update()
             except tk.TclError:
                 pass
 
@@ -225,13 +224,18 @@ def main():
         w = root.focus_get()
         if isinstance(w, tk.Text):
             try:
-                sel = w.get(tk.SEL_FIRST, tk.SEL_LAST)
-                if sel:
+                if w.tag_ranges(tk.SEL):
+                    sel = w.get(tk.SEL_FIRST, tk.SEL_LAST)
+                else:
+                    sel = w.get("1.0", tk.END)
+                if sel and sel.strip():
                     root.clipboard_clear()
-                    root.clipboard_append(sel)
+                    root.clipboard_append(sel.strip())
+                    root.update()
             except tk.TclError:
                 pass
     root.bind("<Control-c>", _copy_selection)
+    root.bind("<Control-C>", _copy_selection)
 
     def _format_validator_display(raw: str) -> str:
         """Если в строке есть валидный JSON — форматирует его с отступами для читаемого отображения."""
