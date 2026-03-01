@@ -5,6 +5,7 @@
   https://docs.robokassa.ru/ru/quick-start
   https://docs.robokassa.ru/ru/pay-interface
   https://docs.robokassa.ru/ru/notifications-and-redirects
+  https://docs.robokassa.ru/ru/testing-mode — при IsTest=1 обязательны ТЕСТОВЫЕ пароли из «Технические настройки».
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import hashlib
 import os
 import time
 import json
+import logging
 import sqlite3
 import secrets
 from dataclasses import dataclass
@@ -211,6 +213,34 @@ def build_payment_url(
     email: str | None = None,
 ) -> str:
     out_sum_s = _to_amount_str(out_sum)
+    # #region agent log
+    try:
+        _log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug-15b236.log")
+        _shp_keys = sorted(shp.keys()) if shp else []
+        with open(_log_path, "a", encoding="utf-8") as _f:
+            _f.write(
+                json.dumps(
+                    {
+                        "id": "build_payment_url",
+                        "timestamp": time.time(),
+                        "location": "robokassa_integration.build_payment_url",
+                        "message": "Payment URL built",
+                        "data": {
+                            "is_test": cfg.is_test,
+                            "merchant_login": cfg.merchant_login,
+                            "inv_id": inv_id,
+                            "out_sum": out_sum_s,
+                            "shp_keys": _shp_keys,
+                        },
+                        "hypothesisId": "H1",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
     sig_str = f"{cfg.merchant_login}:{out_sum_s}:{inv_id}:{cfg.password1}{_shp_signature_part(shp)}"
     signature = _md5_hex(sig_str)
 
@@ -225,6 +255,12 @@ def build_payment_url(
     }
     if cfg.is_test:
         params["IsTest"] = "1"
+        # При IsTest=1 Робокасса принимает только ТЕСТОВУЮ пару паролей из раздела «Технические настройки».
+        # Использование боевых паролей приводит к ошибке 29 и сообщению «Форма оплаты не работает».
+        logging.getLogger(__name__).warning(
+            "Robokassa: is_test=1. Убедитесь, что в .env указаны ТЕСТОВЫЕ Пароль №1 и Пароль №2 "
+            "из вкладки «Технические настройки» личного кабинета Robokassa, а не боевые пароли."
+        )
     if email:
         params["Email"] = email
     params.update(shp)

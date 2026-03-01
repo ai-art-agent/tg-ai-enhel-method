@@ -16,6 +16,9 @@ Write-Host "--- 2. Add files ---" -ForegroundColor Yellow
 git add .
 git add bot.py
 git add deploy/tg-ai-enhel-method.service
+git add deploy/robokassa-server.service
+git add robokassa_integration.py
+git add robokassa_server.py
 git add system_prompt.txt
 git status
 Write-Host ""

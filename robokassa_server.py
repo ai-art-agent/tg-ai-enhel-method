@@ -21,6 +21,8 @@ HTTP-сервер Robokassa для развёртывания на ВМ (Yandex 
 """
 
 import os
+import time
+import json
 import logging
 from typing import Any, Dict
 
@@ -70,10 +72,31 @@ async def robokassa_result(request: Request) -> PlainTextResponse:
     ResultURL: подтверждение оплаты от Robokassa.
     Должен вернуть "OK{InvId}" при успешной проверке подписи.
     """
+    params = await _collect_params(request)
+    # #region agent log
+    try:
+        _log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug-15b236.log")
+        with open(_log_path, "a", encoding="utf-8") as _f:
+            _f.write(
+                json.dumps(
+                    {
+                        "id": "robokassa_result_called",
+                        "timestamp": time.time(),
+                        "location": "robokassa_server.robokassa_result",
+                        "message": "ResultURL hit",
+                        "data": {"InvId": params.get("InvId"), "OutSum": params.get("OutSum")},
+                        "hypothesisId": "H3",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
     try:
         cfg = RobokassaConfig.from_env()
         db = PaymentsDB.from_env()
-        params = await _collect_params(request)
         parsed = verify_result_url(params, cfg=cfg)
 
         inv_id = int(parsed["inv_id"])
