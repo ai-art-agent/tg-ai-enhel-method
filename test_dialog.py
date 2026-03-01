@@ -47,7 +47,7 @@ async def main() -> None:
 
         print("Бот: ", end="", flush=True)
         try:
-            reply, buttons, _, _ = await get_bot_reply(TEST_USER_ID, line, context=None)
+            reply, buttons, _, _, _ = await get_bot_reply(TEST_USER_ID, line, context=None)
             last_buttons = buttons or []
             print(reply or "(пусто)")
             if last_buttons:

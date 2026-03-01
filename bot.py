@@ -98,7 +98,8 @@ def _load_validator_prompt() -> str:
 
 VALIDATOR_PROMPT = _load_validator_prompt()
 VALIDATOR_ENABLED = bool(VALIDATOR_PROMPT)
-MAX_VALIDATION_RETRIES = 2
+# 0 = одна проверка, без перегенерации. 1 = одна перегенерация при отклонении (три облака: ответ → вердикт → новый ответ).
+MAX_VALIDATION_RETRIES = 1
 
 
 def _load_simulator_prompt() -> str:
@@ -324,12 +325,8 @@ def _parse_step_from_reply(reply: str) -> tuple[str, Optional[str]]:
 
 
 def _readiness_label_and_callback(form_address: Optional[str]) -> tuple[str, str]:
-    """По выбранной форме обращения возвращает (подпись кнопки, callback_data) для шага readiness."""
-    if form_address == "Мужская форма обращения":
-        return "Готов", "Готов"
-    if form_address == "Женская форма обращения":
-        return "Готова", "Готова"
-    return "Готов/готова", "Готов/готова"
+    """Подпись и callback кнопки для шага readiness (обезличенно)."""
+    return "Хочу продолжить", "Хочу продолжить"
 
 
 def _keyboard_for_step(step_id: str, context: Optional[ContextTypes.DEFAULT_TYPE] = None) -> Optional[InlineKeyboardMarkup]:
@@ -590,7 +587,7 @@ async def handle_step_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not user_text:
         return
 
-    # Запоминаем форму обращения для кнопки «Готов/Готова» на шаге readiness.
+    # Запоминаем форму обращения для обращения к пользователю; кнопка readiness — «Хочу продолжить».
     if user_text in ("Мужская форма обращения", "Женская форма обращения", "Нейтральная форма обращения"):
         context.user_data["form_address"] = user_text
 
@@ -726,9 +723,10 @@ async def get_bot_reply(
     stream_callback: Optional[Callable[[str], None]] = None,
 ):
     """
-    Один шаг диалога без Telegram. Возвращает (reply_clean, buttons, validator_outputs, timings).
+    Один шаг диалога без Telegram. Возвращает (reply_clean, buttons, validator_outputs, timings, rejected_reply_clean).
     validator_outputs: список (raw_validator, reply_raw, validator_ms).
     timings: {"psychologist_ms": int}.
+    rejected_reply_clean: если была перегенерация — текст первого (отклонённого) ответа для отображения первым облаком; иначе None.
     stream_callback(text_so_far): при задании ответ психолога стримится по фрагментам.
     """
     add_to_history(user_id, "user", user_text)
@@ -741,23 +739,27 @@ async def get_bot_reply(
     psychologist_ms = int((time.monotonic() - t0_psych) * 1000)
 
     validator_outputs = []
+    rejected_reply_clean = None
     retries = 0
     while VALIDATOR_ENABLED and retries <= MAX_VALIDATION_RETRIES:
-        t0_val = time.monotonic()
-        valid, errors, recommendations, raw_validator = await _validate_reply(reply_raw)
-        validator_ms = int((time.monotonic() - t0_val) * 1000)
-        if log_validator_full and raw_validator:
-            logging.info("Валидатор (полный ответ): %s", raw_validator)
-        if raw_validator:
-            validator_outputs.append((raw_validator, reply_raw, validator_ms))
-        if validator_callback and raw_validator:
-            try:
-                validator_callback(raw_validator)
-            except Exception:
-                pass
-        if valid:
-            if retries > 0:
-                logging.info("Валидатор: ответ принят после перегенерации (попытка %d).", retries + 1)
+        # Валидатор вызываем только для первого ответа; после перегенерации второй ответ не проверяем (лимит перегенераций всё равно исчерпан).
+        if retries == 0:
+            t0_val = time.monotonic()
+            valid, errors, recommendations, raw_validator = await _validate_reply(reply_raw)
+            validator_ms = int((time.monotonic() - t0_val) * 1000)
+            if log_validator_full and raw_validator:
+                logging.info("Валидатор (полный ответ): %s", raw_validator)
+            if raw_validator:
+                validator_outputs.append((raw_validator, reply_raw, validator_ms))
+            if validator_callback and raw_validator:
+                try:
+                    validator_callback(raw_validator)
+                except Exception:
+                    pass
+            if valid:
+                break
+        else:
+            valid = True
             break
         if retries >= MAX_VALIDATION_RETRIES:
             logging.info(
@@ -766,6 +768,12 @@ async def get_bot_reply(
                 "; ".join(errors) if errors else "—",
             )
             break
+        # Сохраняем отклонённый ответ для отображения первым облаком (ответ → вердикт → новый ответ).
+        rej_clean, rej_step = _parse_step_from_reply(reply_raw)
+        rej_kb = _keyboard_for_step(rej_step, context) if rej_step else None
+        if rej_kb is None:
+            rej_clean, _ = _parse_custom_buttons(rej_clean)
+        rejected_reply_clean = (rej_clean or "").strip()
         logging.info(
             "Валидатор: ответ отклонён — %s. Перегенерация %d/%d.",
             "; ".join(errors) if errors else "—",
@@ -777,7 +785,7 @@ async def get_bot_reply(
             retry_parts.append("Нарушения: " + "; ".join(errors) + ".")
         if recommendations:
             retry_parts.append("Рекомендации: " + "; ".join(recommendations) + ".")
-        retry_parts.append("Ответь заново, исправив перечисленное.")
+        retry_parts.append("Ответь заново, исправив перечисленное. Важно: не извиняйся перед пользователем, не пиши «прошу прощения за ошибку», «извините» и т.п. — пользователь не видит валидатор. Просто дай исправленный ответ.")
         retry_messages = messages + [
             {"role": "assistant", "content": reply_raw},
             {"role": "user", "content": " ".join(retry_parts)},
@@ -799,7 +807,7 @@ async def get_bot_reply(
             for btn in row:
                 buttons.append((getattr(btn, "text", ""), getattr(btn, "callback_data", "")))
     timings = {"psychologist_ms": psychologist_ms}
-    return (reply_clean or "").strip(), buttons, validator_outputs, timings
+    return (reply_clean or "").strip(), buttons, validator_outputs, timings, rejected_reply_clean
 
 
 def _is_terminal_action(simulator_message: str) -> bool:

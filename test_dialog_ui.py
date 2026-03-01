@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import queue
+import re
 import sys
 import threading
 import tkinter as tk
@@ -137,17 +138,87 @@ def main():
     bubble_font = tkfont.Font(family="Segoe UI", size=10)
     tech_font = tkfont.Font(family="Consolas", size=9)
 
+    def _insert_telegram_style(txt_widget: tk.Text, text: str, base_font, fg: str):
+        """Вставляет текст в Text, конвертируя **жирный** в выделение жирным шрифтом (как в Telegram)."""
+        if not text:
+            return
+        try:
+            actual = base_font.actual() if hasattr(base_font, "actual") else {}
+        except Exception:
+            actual = {}
+        family = actual.get("family", "Segoe UI")
+        size = actual.get("size", 10)
+        bold_font = tkfont.Font(family=family, size=size, weight="bold")
+        try:
+            txt_widget.tag_configure("bold", font=bold_font, foreground=fg)
+        except Exception:
+            txt_widget.tag_configure("bold", foreground=fg)
+        parts = re.split(r"\*\*(.+?)\*\*", text)
+        for i, part in enumerate(parts):
+            if i % 2 == 0:
+                txt_widget.insert(tk.END, part)
+            else:
+                start = txt_widget.index(tk.END)
+                txt_widget.insert(tk.END, part)
+                txt_widget.tag_add("bold", start, tk.END)
+
     def _make_selectable_text(parent, text: str, font, bg, fg, width_chars: int = 52):
-        """Текст можно выделять и копировать (Ctrl+C)."""
+        """Текст можно выделять мышью и копировать (Ctrl+C или правый клик → Копировать). Поддерживается **жирный** как в Telegram."""
         lines = (text or "").split("\n")
         height = max(1, min(25, sum(1 + len(l) // width_chars for l in lines)))
         txt = tk.Text(
             parent, font=font, wrap=tk.WORD, state=tk.NORMAL, height=height,
             bg=bg, fg=fg, padx=0, pady=0, relief=tk.FLAT, cursor="xterm",
             width=width_chars, insertbackground=fg, selectbackground="#B4D5FE", selectforeground="#000",
+            takefocus=True, exportselection=True,
         )
-        txt.insert(tk.END, text or "")
-        txt.bind("<Key>", lambda e: "break")
+        base_font = font if isinstance(font, tkfont.Font) else bubble_font
+        try:
+            _insert_telegram_style(txt, text or "", base_font, fg)
+        except Exception:
+            txt.insert(tk.END, text or "")
+        def _do_copy(_=None):
+            try:
+                if txt.tag_ranges(tk.SEL):
+                    sel = txt.get(tk.SEL_FIRST, tk.SEL_LAST)
+                else:
+                    sel = txt.get("1.0", tk.END)
+                if sel and sel.strip():
+                    root.clipboard_clear()
+                    root.clipboard_append(sel.strip())
+            except tk.TclError:
+                pass
+            return "break"
+        txt.bind("<Control-c>", _do_copy)
+        txt.bind("<Control-C>", _do_copy)
+        def _on_key(e):
+            if (e.state & 0x4) and e.keysym.lower() == 'c':
+                _do_copy()
+            return "break"
+        txt.bind("<Key>", _on_key)
+
+        def _on_right_click(event):
+            try:
+                txt.focus_set()
+            except tk.TclError:
+                pass
+            menu = tk.Menu(txt, tearoff=0)
+            menu.add_command(label="Копировать", command=lambda: _copy_from_text(txt))
+            menu.tk_popup(event.x_root, event.y_root)
+
+        def _copy_from_text(w):
+            try:
+                if w.tag_ranges(tk.SEL):
+                    sel = w.get(tk.SEL_FIRST, tk.SEL_LAST)
+                else:
+                    sel = w.get("1.0", tk.END)
+                if sel and sel.strip():
+                    root.clipboard_clear()
+                    root.clipboard_append(sel.strip())
+            except tk.TclError:
+                pass
+
+        txt.bind("<Button-3>", _on_right_click)
         return txt
 
     def _copy_selection(_=None):
@@ -256,10 +327,10 @@ def main():
             try:
                 def on_chunk(t):
                     result_q.put(("chunk", t))
-                reply, buttons, _, timings = loop.run_until_complete(
+                reply, buttons, validator_outputs, timings, rejected_reply = loop.run_until_complete(
                     get_bot_reply(TEST_USER_ID, text.strip(), context=None, stream_callback=on_chunk)
                 )
-                result_q.put(("ok", reply, buttons, timings))
+                result_q.put(("ok", (reply, buttons, timings, validator_outputs, rejected_reply)))
             except Exception as e:
                 result_q.put(("err", str(e), [], None))
             finally:
@@ -302,14 +373,42 @@ def main():
             streaming_ref[0] = None
             return
         if status == "ok":
-            reply, buttons, timings = a, b, c
+            payload = a
+            if isinstance(payload, tuple) and len(payload) >= 5:
+                reply, buttons, timings, validator_outputs, rejected_reply = payload[0], payload[1], payload[2], payload[3], payload[4]
+            else:
+                reply, buttons, timings = a, b, c
+                validator_outputs = []
+                rejected_reply = None
             ref = streaming_ref[0]
-            if ref:
+            if rejected_reply and validator_outputs:
+                # Три облака: отклонённый ответ → вердикт валидатора (без повтора текста) → новый ответ.
+                if ref:
+                    try:
+                        w = ref["text_widget"]
+                        w.config(state=tk.NORMAL)
+                        w.delete(1.0, tk.END)
+                        _insert_telegram_style(w, rejected_reply or "", bubble_font, "#000")
+                    except Exception:
+                        pass
+                    if ref.get("count_lbl"):
+                        ref["count_lbl"].config(text=f"{len(rejected_reply or '')} симв.")
+                    if ref.get("timing_lbl"):
+                        ref["timing_lbl"].config(text="Время: —")
+                    if ref.get("btn_frame"):
+                        for child in ref["btn_frame"].winfo_children():
+                            child.destroy()
+                streaming_ref[0] = None
+                raw_val, _, val_ms = validator_outputs[0]
+                timing_sec = (val_ms / 1000.0) if isinstance(val_ms, (int, float)) else None
+                add_bubble("left", "Валидатор: " + (raw_val or ""), is_technical=True, timing_sec=timing_sec)
+                add_bubble("left", reply, buttons=buttons, timing_sec=(timings.get("psychologist_ms") or 0) / 1000.0 if timings else None)
+            elif ref:
                 try:
                     w = ref["text_widget"]
                     w.config(state=tk.NORMAL)
                     w.delete(1.0, tk.END)
-                    w.insert(tk.END, reply or "")
+                    _insert_telegram_style(w, reply or "", bubble_font, "#000")
                 except Exception:
                     pass
                 if ref.get("count_lbl"):
@@ -323,7 +422,7 @@ def main():
                         bt = _make_selectable_text(pill, label, ("Segoe UI", 9), BORDER_BOT, "#333", width_chars=20)
                         bt.config(height=1)
                         bt.pack()
-            streaming_ref[0] = None
+                streaming_ref[0] = None
             if buttons:
                 show_buttons(buttons)
             else:
@@ -356,7 +455,7 @@ def main():
             clear_history(TEST_USER_ID)
             q.put(("clear", None))
             q.put(("tech", "Старт автодиалога (два бота). Нажмите СТОП для остановки."))
-            reply, buttons, validator_texts, timings = await get_bot_reply(
+            reply, buttons, validator_texts, timings, rejected_reply = await get_bot_reply(
                 TEST_USER_ID, "start_chat", context=None,
                 log_validator_full=True,
             )
@@ -364,9 +463,13 @@ def main():
                 q.put(("tech", "Остановлено пользователем."))
                 q.put(("done", None))
                 return
-            q.put(("bot", (reply, buttons, timings)))
-            for v in validator_texts:
-                q.put(("validator", v))
+            q.put(("bot", (reply, buttons, timings, validator_texts, rejected_reply)))
+            if rejected_reply and validator_texts:
+                for v in validator_texts[1:]:
+                    q.put(("validator", v))
+            else:
+                for v in validator_texts:
+                    q.put(("validator", v))
             steps = 0
             while steps < 60:
                 if stop_flag[0]:
@@ -383,7 +486,7 @@ def main():
                 if _is_terminal(sim_msg):
                     q.put(("tech", "Диалог завершён: " + sim_msg + ". Запрашиваем SHOW_JSON…"))
                     break
-                reply, buttons, validator_texts, timings = await get_bot_reply(
+                reply, buttons, validator_texts, timings, rejected_reply = await get_bot_reply(
                     TEST_USER_ID, sim_msg, context=None,
                     log_validator_full=True,
                 )
@@ -391,11 +494,15 @@ def main():
                     q.put(("tech", "Остановлено пользователем."))
                     break
                 steps += 1
-                q.put(("bot", (reply, buttons, timings)))
-                for v in validator_texts:
-                    q.put(("validator", v))
+                q.put(("bot", (reply, buttons, timings, validator_texts, rejected_reply)))
+                if rejected_reply and validator_texts:
+                    for v in validator_texts[1:]:
+                        q.put(("validator", v))
+                else:
+                    for v in validator_texts:
+                        q.put(("validator", v))
             if not stop_flag[0]:
-                json_reply, _, json_validators, _ = await get_bot_reply(
+                json_reply, _, json_validators, _, _ = await get_bot_reply(
                     TEST_USER_ID, "SHOW_JSON", context=None,
                     log_validator_full=True,
                 )
@@ -442,8 +549,17 @@ def main():
         elif kind == "bot":
             reply, buttons = payload[0], payload[1]
             timings = payload[2] if len(payload) > 2 else None
+            validator_texts = payload[3] if len(payload) > 3 else []
+            rejected_reply = payload[4] if len(payload) > 4 else None
             timing_sec = (timings["psychologist_ms"] / 1000.0) if timings and timings.get("psychologist_ms") is not None else None
-            add_bubble("left", reply, buttons=buttons, timing_sec=timing_sec)
+            if rejected_reply and validator_texts:
+                add_bubble("left", rejected_reply)
+                raw_val, _, val_ms = validator_texts[0]
+                v_sec = (val_ms / 1000.0) if isinstance(val_ms, (int, float)) else None
+                add_bubble("left", "Валидатор: " + (raw_val or ""), is_technical=True, timing_sec=v_sec)
+                add_bubble("left", reply, buttons=buttons, timing_sec=timing_sec)
+            else:
+                add_bubble("left", reply, buttons=buttons, timing_sec=timing_sec)
             if buttons:
                 show_buttons(buttons)
             else:
