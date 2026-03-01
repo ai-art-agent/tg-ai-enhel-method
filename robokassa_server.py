@@ -20,8 +20,15 @@ HTTP-сервер Robokassa для развёртывания на ВМ (Yandex 
   Success URL = http://ВАШ_IP:8000/robokassa/success
   Fail URL    = http://ВАШ_IP:8000/robokassa/fail
 
+На ВМ в .env задайте TELEGRAM_BOT_USERNAME (без @), например MyPsychologistBot,
+чтобы на страницах успеха/ошибки показывалась кнопка «Открыть чат» и на мобильных
+выполнялся переход в приложение Telegram.
+
 Документация: https://docs.robokassa.ru/ru/notifications-and-redirects
 При фильтрации по IP разрешите: 185.59.216.65, 185.59.217.65
+
+Тестовый режим (IsTest=1): на тестовой странице оплаты выберите блок
+«Успешное проведение платежа» — иначе попадёте на Fail URL и ResultURL не вызовется.
 """
 
 import os
@@ -31,7 +38,7 @@ import logging
 from typing import Any, Dict
 
 from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, HTMLResponse
 
 from robokassa_integration import (
     PaymentsDB,
@@ -78,6 +85,81 @@ async def _collect_params(request: Request) -> Dict[str, Any]:
             # не form-data — можно игнорировать
             pass
     return params
+
+
+def _bot_open_link() -> str:
+    """Ссылка для открытия чата (t.me/username). Пустая строка, если username не задан."""
+    username = (os.getenv("TELEGRAM_BOT_USERNAME") or "").strip().lstrip("@")
+    if not username:
+        return ""
+    return f"https://t.me/{username}"
+
+
+def _success_html() -> str:
+    link = _bot_open_link()
+    if link:
+        # username для tg://resolve?domain=... (на мобильных открывает приложение)
+        username = link.rstrip("/").split("/")[-1] if link else ""
+        return f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Оплата принята</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; text-align: center; padding: 2rem; margin: 0; }}
+    .msg {{ margin-bottom: 1.5rem; color: #333; }}
+    a.btn {{ display: inline-block; padding: 12px 24px; background: #0088cc; color: #fff; text-decoration: none; border-radius: 8px; font-size: 1.1rem; }}
+    a.btn:hover {{ background: #006699; }}
+  </style>
+  <script>
+    (function() {{
+      var username = {json.dumps(username)};
+      var isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      if (isMobile && username) {{
+        setTimeout(function() {{ window.location.href = 'tg://resolve?domain=' + username; }}, 1500);
+      }}
+    }})();
+  </script>
+</head>
+<body>
+  <p class="msg">Оплата принята. Ваш доступ уже отправлен — откройте чат, чтобы получить его.</p>
+  <p><a class="btn" href="{link}">Открыть чат</a></p>
+</body>
+</html>"""
+    return """<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Оплата принята</title></head>
+<body style="font-family:system-ui,sans-serif;text-align:center;padding:2rem"><p>Оплата принята. Ваш доступ уже отправлен.</p></body>
+</html>"""
+
+
+def _fail_html() -> str:
+    link = _bot_open_link()
+    if link:
+        return f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Оплата не завершена</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; text-align: center; padding: 2rem; margin: 0; }}
+    .msg {{ margin-bottom: 1.5rem; color: #333; }}
+    a.btn {{ display: inline-block; padding: 12px 24px; background: #0088cc; color: #fff; text-decoration: none; border-radius: 8px; font-size: 1.1rem; }}
+    a.btn:hover {{ background: #006699; }}
+  </style>
+</head>
+<body>
+  <p class="msg">Оплата не завершена. Вы можете попробовать ещё раз.</p>
+  <p><a class="btn" href="{link}">Вернуться в чат</a></p>
+</body>
+</html>"""
+    return """<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Оплата не завершена</title></head>
+<body style="font-family:system-ui,sans-serif;text-align:center;padding:2rem"><p>Оплата не завершена. Вы можете попробовать ещё раз.</p></body>
+</html>"""
 
 
 @app.api_route("/robokassa/result", methods=["GET", "POST"])
@@ -160,7 +242,7 @@ async def robokassa_result(request: Request) -> PlainTextResponse:
 
 
 @app.get("/robokassa/success")
-async def robokassa_success(request: Request) -> PlainTextResponse:
+async def robokassa_success(request: Request) -> HTMLResponse:
     """
     SuccessURL: редирект пользователя после оплаты.
     Это НЕ подтверждение оплаты — оно приходит на ResultURL.
@@ -169,22 +251,18 @@ async def robokassa_success(request: Request) -> PlainTextResponse:
         cfg = RobokassaConfig.from_env()
         params = await _collect_params(request)
         _ = verify_success_url(params, cfg=cfg)
-        return PlainTextResponse(
-            "Оплата принята. Вернитесь в Telegram — бот пришлёт доступ.",
-            media_type="text/plain; charset=utf-8",
-        )
+        return HTMLResponse(_success_html())
     except Exception as e:
         logger.exception("Robokassa (VM): SuccessURL error: %s", e)
-        return PlainTextResponse(
-            "Не удалось проверить оплату. Если деньги списались — напишите в поддержку.",
-            media_type="text/plain; charset=utf-8",
+        return HTMLResponse(
+            """<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"></head>
+<body style="font-family:system-ui,sans-serif;text-align:center;padding:2rem">
+  <p>Не удалось проверить оплату. Если деньги списались — напишите в поддержку.</p>
+</body></html>"""
         )
 
 
 @app.get("/robokassa/fail")
-async def robokassa_fail(request: Request) -> PlainTextResponse:  # noqa: ARG001
-    return PlainTextResponse(
-        "Оплата не завершена. Вы можете попробовать ещё раз в боте.",
-        media_type="text/plain; charset=utf-8",
-    )
+async def robokassa_fail(request: Request) -> HTMLResponse:  # noqa: ARG001
+    return HTMLResponse(_fail_html())
 

@@ -365,6 +365,7 @@ ROBOKASSA_PASSWORD2=пароль_2_для_ResultURL
 ```env
 ROBOKASSA_IS_TEST=1
 PAYMENTS_DB_PATH=payments.sqlite3
+TELEGRAM_BOT_USERNAME=имя_вашего_бота_без_собаки
 PRICE_GROUP_RUB=29990
 PRICE_WEBINAR_RUB=3000
 PRICE_PRO_RUB=990
@@ -372,6 +373,8 @@ WEBINAR_ACCESS_URL=https://...
 GROUP_COURSE_ACCESS_URL=https://...
 PRO_BOT_URL=https://t.me/...
 ```
+
+Переменная `TELEGRAM_BOT_USERNAME` нужна для страниц успеха/ошибки оплаты (robokassa-server): на них показывается кнопка «Открыть чат», ведущая в ваш бот; на мобильных возможен автоматический переход в приложение Telegram.
 
 ### Два ключа DeepSeek (опционально, рекомендуется при нагрузке)
 
