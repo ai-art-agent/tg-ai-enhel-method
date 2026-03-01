@@ -8,7 +8,7 @@ User=enhel-method
 WorkingDirectory=/home/enhel-method/tg-ai-enhel-method
 Environment=PATH=/home/enhel-method/tg-ai-enhel-method/venv/bin
 EnvironmentFile=/home/enhel-method/tg-ai-enhel-method/.env
-ExecStart=/home/enhel-method/tg-ai-enhel-method/venv/bin/uvicorn robokassa_server:app --host 0.0.0.0 --port 8000
+ExecStart=/home/enhel-method/tg-ai-enhel-method/venv/bin/uvicorn robokassa_server:app --host 0.0.0.0 --port 8000 --http h11
 Restart=always
 RestartSec=10
 

@@ -9,15 +9,16 @@ HTTP-сервер Robokassa для развёртывания на ВМ (Yandex 
   GET  /robokassa/fail    — FailURL (отмена/ошибка оплаты)
 
 Запуск (в venv на ВМ, пример):
-  uvicorn robokassa_server:app --host 0.0.0.0 --port 8000
+  uvicorn robokassa_server:app --host 0.0.0.0 --port 8000 --http h11
+
+  Параметр --http h11 использует парсер h11 вместо httptools; если в логах
+  есть «Invalid HTTP request received» при вызовах от Робокассы, h11 часто
+  принимает такие запросы и тогда в логе появится строка GET /robokassa/result.
 
 В кабинете Robokassa:
   Result URL  = http://ВАШ_IP:8000/robokassa/result
   Success URL = http://ВАШ_IP:8000/robokassa/success
   Fail URL    = http://ВАШ_IP:8000/robokassa/fail
-
-Предупреждения uvicorn «Invalid HTTP request received» в логах подавляются фильтром:
-они обычно вызваны сканерами/обрывами соединений и не влияют на оплату.
 
 Документация: https://docs.robokassa.ru/ru/notifications-and-redirects
 При фильтрации по IP разрешите: 185.59.216.65, 185.59.217.65
@@ -46,24 +47,6 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
-
-
-class _SuppressInvalidHTTPFilter(logging.Filter):
-    """Скрывает предупреждение uvicorn «Invalid HTTP request received».
-
-    Оно возникает при невалидном/оборванном HTTP (сканеры, боты, обрывы соединения)
-    и не связано с работой ResultURL/SuccessURL. Сервер при этом обрабатывает запросы нормально.
-    """
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage() if record.msg else str(record.msg)
-        if "Invalid HTTP request received" in msg:
-            return False
-        return True
-
-
-# Применяем к логгеру uvicorn, чтобы не засорять журнал
-logging.getLogger("uvicorn.error").addFilter(_SuppressInvalidHTTPFilter())
 
 app = FastAPI()
 
