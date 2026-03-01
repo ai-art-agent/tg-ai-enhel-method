@@ -51,6 +51,16 @@ logging.basicConfig(
 app = FastAPI()
 
 
+@app.middleware("http")
+async def log_robokassa_requests(request: Request, call_next):
+    """Логирует каждый запрос к /robokassa/* с IP — чтобы видеть вызовы от Робокассы (185.59.216.65)."""
+    if request.url.path.startswith("/robokassa/"):
+        client = request.client
+        host = client.host if client else request.headers.get("x-forwarded-for", "?")
+        logger.info("Robokassa request: %s %s from %s", request.method, request.url.path, host)
+    return await call_next(request)
+
+
 async def _collect_params(request: Request) -> Dict[str, Any]:
     """
     Собираем параметры из query string и form-urlencoded body.
